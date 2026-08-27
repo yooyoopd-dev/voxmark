@@ -33,11 +33,13 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MeetingRecorder-win-x64
-          path: publish/MeetingRecorder.exe
+          name: VoxMark-win-x64
+          # AssemblyName is VoxMark, so this is the file dotnet publish
+          # actually produces.
+          path: publish/VoxMark.exe
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: publish/MeetingRecorder.exe
+          files: publish/VoxMark.exe
