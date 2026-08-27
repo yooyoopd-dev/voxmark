@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MeetingRecorder</RootNamespace>
+    <AssemblyName>VoxMark</AssemblyName>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+
+    <!-- Single-file, self-contained Windows build. No .NET runtime install
+         is required on the machine that runs the resulting .exe. See
+         CLAUDE.md "Windows Build & Packaging" for the exact publish command
+         and why this project uses WPF (not the design guide's WinUI3/MSIX
+         suggestion) to keep that promise. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="icon.ico" />
+    <Resource Include="wpf_icon.ico" />
+    <Resource Include="..\icon\icon.png" Link="icon.png" />
+    <!-- Capture: pure-managed wrapper over WinMM/WASAPI, no extra native
+         DLLs beyond what Windows itself provides. -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- Encode: bundles libmp3lame.dll (x86 + x64) as content, so MP3
+         encoding needs no ffmpeg process and no runtime download — matches
+         the design guide's "bundled LAME" build note. -->
+    <PackageReference Include="NAudio.Lame" Version="2.1.0" />
+  </ItemGroup>
+
+</Project>

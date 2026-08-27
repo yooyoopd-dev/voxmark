@@ -1,0 +1,17 @@
+## .NET / Visual Studio
+bin/
+obj/
+publish/
+*.user
+*.suo
+.vs/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Recordings produced by the app (never commit user audio)
+*.wav
+*.mp3
+Recordings/
+Sessions/

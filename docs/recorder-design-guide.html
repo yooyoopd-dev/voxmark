@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<!--
+  Archived, read-only copy of the "Recorder Design Guide" from
+  claude.ai/design, checked in so the build spec travels with the repo
+  instead of living only in a private link. This file won't render
+  correctly stand-alone (it references a design-tool runtime — ./support.js
+  and _ds/... — that isn't included here); it's here to be read as text/
+  grepped, not opened in a browser. See CLAUDE.md for what's implemented
+  vs. deferred against it.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/nocturne-b7b1dd3b-f8f7-43ae-8596-4174a876d9b9/styles.css">
+<script src="_ds/nocturne-b7b1dd3b-f8f7-43ae-8596-4174a876d9b9/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#0e1019;color:#e9e9ed;font-family:"Inter",system-ui,sans-serif;font-size:15px;line-height:1.6}
+h1,h2,h3,h4{font-family:"Inter",system-ui,sans-serif;font-weight:500;letter-spacing:-.015em;margin:0}
+a{color:#9184d9;text-underline-offset:3px}
+a:hover{color:#b5abfc}
+::selection{background:rgba(145,132,217,.3)}
+.n{font-variant-numeric:tabular-nums}
+.m{font-family:"JetBrains Mono",ui-monospace,monospace}
+</style>
+</helmet>
+
+<div style="max-width:1620px;margin:0 auto;padding:56px 44px 120px;display:flex;flex-direction:column;gap:72px">
+
+<header style="display:flex;flex-direction:column;gap:18px;max-width:960px">
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+<span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9184d9">Design Guide v0.1</span>
+<span style="width:34px;height:1px;background:#5d5294"></span>
+<span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#75798c">Windows 11 Desktop · Offline only</span>
+</div>
+<h1 style="font-size:48px;line-height:1.06">Meeting Recorder &amp; Speaker Marker<br><span style="color:#9397ab">Design specification for the build agent</span></h1>
+<p style="margin:0;font-size:17px;color:#b2b6ca;max-width:820px;text-wrap:pretty">One Windows 11 machine sits in the room, records the whole meeting to a single audio file, and lets one operator mark who is speaking by clicking a name or pressing a number key. The output is an MP3 plus a Markdown file of speaker names and timestamp ranges. Those two files are then handed to an LLM to produce a per-speaker transcript. Nothing else belongs in this product.</p>
+<p style="margin:0;font-size:14px;color:#75798c;max-width:820px">Read this document top to bottom before writing code. Sections 01–03 are constraints, 04–08 are the screens, 09 is the keyboard model, and 10–11 are contracts to implement exactly.</p>
+</header>
+
+<section style="display:flex;flex-wrap:wrap;gap:18px">
+<div style="flex:1 1 300px;min-width:290px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px 22px">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#e58095;margin-bottom:8px">Resolved conflict</div>
+<p style="margin:0;font-size:14px;color:#cfd3e5">The written brief described an Android phone app; the platform answer was <b>Windows 11 desktop only</b>. Desktop wins. Every phone-specific assumption has been dropped: the layout is now a single resizable window, marking is keyboard-first, and the microphone is the PC's own input rather than a handset.</p>
+</div>
+<div style="flex:1 1 300px;min-width:290px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px 22px">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9184d9;margin-bottom:8px">Assumed, needs confirming</div>
+<p style="margin:0;font-size:14px;color:#cfd3e5">Audio comes from the <b>PC's own microphone</b>, one input device, recording the room. System-audio capture (the far end of the Teams/Meet call) is <b>not</b> in this version; the room mic picks up the room speakers. With ten people around a table this is the weakest link in the chain — the setup screen therefore makes the level check unskippable.</p>
+</div>
+<div style="flex:1 1 300px;min-width:290px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px 22px">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9184d9;margin-bottom:8px">Offline only</div>
+<p style="margin:0;font-size:14px;color:#cfd3e5">No network calls, no accounts, no telemetry, no cloud sync. Everything lives in a local folder the user picks. The app must work with the network adapter disabled, and must never show a spinner that waits on a server.</p>
+</div>
+<div style="flex:1 1 300px;min-width:290px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px 22px">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9184d9;margin-bottom:8px">First principle</div>
+<p style="margin:0;font-size:14px;color:#cfd3e5">The operator is also a participant. They will look away, mis-click, and forget to close a mark. <b>Recording never stops for any reason</b>, and every mistake is repairable in under three seconds without leaving the recording screen.</p>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">01</span><h2 style="font-size:27px">What we took from Ultraschall</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:20px;align-items:stretch">
+<div style="flex:1 1 340px;min-width:320px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:22px">
+<h4 style="font-size:16px;margin-bottom:10px">Coloured markers as the primary object</h4>
+<p style="margin:0 0 14px;font-size:13.5px;color:#b2b6ca">Ultraschall's editing model is a timeline covered in coloured markers you place live and clean up later. We copy that literally: a mark is a coloured <b>block</b> with a start and an end, owned by one speaker, and it is the only data the app produces besides audio.</p>
+<div style="height:52px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d;position:relative;overflow:hidden">
+<div style="position:absolute;top:8px;bottom:8px;left:2%;width:17%;background:#9184d9;border-radius:3px"></div>
+<div style="position:absolute;top:8px;bottom:8px;left:21%;width:10%;background:#d182c9;border-radius:3px"></div>
+<div style="position:absolute;top:8px;bottom:8px;left:33%;width:24%;background:#e58095;border-radius:3px"></div>
+<div style="position:absolute;top:8px;bottom:8px;left:59%;width:8%;background:#e58e6c;border-radius:3px"></div>
+<div style="position:absolute;top:8px;bottom:8px;left:69%;width:21%;background:#4ec39b;border-radius:3px"></div>
+</div>
+</div>
+<div style="flex:1 1 340px;min-width:320px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:22px">
+<h4 style="font-size:16px;margin-bottom:10px">Chapter marker lines over the waveform</h4>
+<p style="margin:0 0 14px;font-size:13.5px;color:#b2b6ca">Ultraschall draws a thin vertical line with a flag where a chapter starts. We reuse the shape for <b>speaker changes</b>: a 1px line at every mark boundary with the speaker's initial in a small flag, drawn on top of the waveform so the operator can read turn-taking at a glance.</p>
+<div style="height:52px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d;position:relative;overflow:hidden">
+<svg viewBox="0 0 300 52" preserveAspectRatio="none" style="width:100%;height:100%;display:block"><path d="M6 26V16M12 26V34M18 26V12M24 26V38M30 26V20M36 26V30M42 26V10M48 26V40M54 26V18M60 26V32M66 26V14M72 26V36M78 26V22M84 26V28M90 26V11M96 26V41M102 26V19M108 26V33M114 26V15M120 26V37M126 26V23M132 26V29M138 26V13M144 26V39M150 26V17M156 26V35M162 26V21M168 26V31M174 26V12M180 26V38M186 26V20M192 26V30M198 26V16M204 26V34M210 26V14M216 26V36M222 26V22M228 26V28M234 26V18M240 26V32M246 26V11M252 26V41M258 26V19M264 26V33M270 26V15M276 26V37M282 26V23M288 26V29M294 26V13" stroke="#595d6c" stroke-width="2.4" stroke-linecap="round"></path></svg>
+<div style="position:absolute;left:19%;top:0;bottom:0;width:1px;background:#d182c9"></div><div style="position:absolute;left:19%;top:3px;padding:1px 4px;background:#d182c9;color:#161826;font-size:9px;border-radius:2px">P</div>
+<div style="position:absolute;left:48%;top:0;bottom:0;width:1px;background:#e58095"></div><div style="position:absolute;left:48%;top:3px;padding:1px 4px;background:#e58095;color:#161826;font-size:9px;border-radius:2px">L</div>
+<div style="position:absolute;left:76%;top:0;bottom:0;width:1px;background:#4ec39b"></div><div style="position:absolute;left:76%;top:3px;padding:1px 4px;background:#4ec39b;color:#161826;font-size:9px;border-radius:2px">H</div>
+</div>
+</div>
+<div style="flex:1 1 260px;min-width:250px;background:#1c1e2c;border-radius:8px;box-shadow:0 0 0 1px #2c2f3d;padding:22px">
+<h4 style="font-size:16px;margin-bottom:10px;color:#9397ab">Not taken</h4>
+<div style="display:flex;flex-direction:column;gap:8px;font-size:13.5px;color:#9397ab">
+<div>· The manual site's own visual styling — it is a Docusaurus documentation theme with no product UI to borrow.</div>
+<div>· Multitrack editing, soundboard, ducking, chapter metadata, publishing. All out of scope.</div>
+<div>· Any REAPER-specific control grammar. This app has five verbs: record, mark, fix, stop, export.</div>
+</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">02</span><h2 style="font-size:27px">Tokens</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:18px">
+
+<div style="flex:1 1 400px;min-width:380px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:22px">
+<h4 style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#9397ab;margin-bottom:16px">Surfaces &amp; accent</h4>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px">
+<div><div style="height:46px;border-radius:6px;background:#0e1019;box-shadow:0 0 0 1px #3f424d"></div><div style="font-size:11px;margin-top:5px">app / void</div><div class="m" style="font-size:10px;color:#75798c">#0e1019</div></div>
+<div><div style="height:46px;border-radius:6px;background:#161826"></div><div style="font-size:11px;margin-top:5px">window bg</div><div class="m" style="font-size:10px;color:#75798c">#161826</div></div>
+<div><div style="height:46px;border-radius:6px;background:#1c1e2c"></div><div style="font-size:11px;margin-top:5px">inset well</div><div class="m" style="font-size:10px;color:#75798c">#1c1e2c</div></div>
+<div><div style="height:46px;border-radius:6px;background:#232532"></div><div style="font-size:11px;margin-top:5px">surface</div><div class="m" style="font-size:10px;color:#75798c">#232532</div></div>
+<div><div style="height:46px;border-radius:6px;background:#9184d9"></div><div style="font-size:11px;margin-top:5px">accent</div><div class="m" style="font-size:10px;color:#75798c">#9184d9</div></div>
+<div><div style="height:46px;border-radius:6px;background:#e58095"></div><div style="font-size:11px;margin-top:5px">rec state</div><div class="m" style="font-size:10px;color:#75798c">#e58095</div></div>
+<div><div style="height:46px;border-radius:6px;background:#e9e9ed"></div><div style="font-size:11px;margin-top:5px">text</div><div class="m" style="font-size:10px;color:#75798c">#e9e9ed</div></div>
+<div><div style="height:46px;border-radius:6px;background:#75798c"></div><div style="font-size:11px;margin-top:5px">text muted</div><div class="m" style="font-size:10px;color:#75798c">#75798c</div></div>
+</div>
+<p style="margin:14px 0 0;font-size:13px;color:#9397ab">Borders are a 1px hairline <span class="m" style="font-size:12px">#3f424d</span>, never a shadow. Elevation on this ground is edge plus ambient darkness — the only real shadow in the app is under the always-on-top mini bar.</p>
+</div>
+
+<div style="flex:1 1 400px;min-width:380px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:22px">
+<h4 style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#9397ab;margin-bottom:16px">Speaker palette — 12 fixed slots</h4>
+<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
+<div><div style="height:36px;border-radius:6px;background:#9184d9"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">01</div></div>
+<div><div style="height:36px;border-radius:6px;background:#d182c9"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">02</div></div>
+<div><div style="height:36px;border-radius:6px;background:#e58095"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">03</div></div>
+<div><div style="height:36px;border-radius:6px;background:#e58e6c"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">04</div></div>
+<div><div style="height:36px;border-radius:6px;background:#c9a04f"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">05</div></div>
+<div><div style="height:36px;border-radius:6px;background:#a2b04f"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">06</div></div>
+<div><div style="height:36px;border-radius:6px;background:#74bd6f"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">07</div></div>
+<div><div style="height:36px;border-radius:6px;background:#4ec39b"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">08</div></div>
+<div><div style="height:36px;border-radius:6px;background:#4ec1bd"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">09</div></div>
+<div><div style="height:36px;border-radius:6px;background:#5fb8de"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">10</div></div>
+<div><div style="height:36px;border-radius:6px;background:#7aabf0"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">11</div></div>
+<div><div style="height:36px;border-radius:6px;background:#8f8fa8"></div><div class="m" style="font-size:10px;color:#75798c;margin-top:4px">12</div></div>
+</div>
+<p style="margin:14px 0 0;font-size:13px;color:#9397ab">One OKLCH ring at L 0.72 / C 0.11, stepped 30°, so no colour outweighs another. Slot 01 is the system accent. Colour is a <b>secondary</b> cue only: the primary identifier is always the slot number and the name, because at twelve speakers adjacent hues are not reliably distinguishable in a dim room. Slots are assigned by registration order and never re-shuffled.</p>
+</div>
+
+<div style="flex:1 1 400px;min-width:380px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:22px">
+<h4 style="font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#9397ab;margin-bottom:16px">Type, spacing, hit area</h4>
+<div style="display:flex;flex-direction:column;gap:11px">
+<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid rgba(233,233,237,.08);padding-bottom:8px"><span class="n" style="font-size:38px;line-height:1;letter-spacing:-.02em">00:12:41</span><span style="font-size:12px;color:#75798c;text-align:right">Elapsed<br>38px / tabular / Inter 500</span></div>
+<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid rgba(233,233,237,.08);padding-bottom:8px"><span style="font-size:20px">Lee Jun-ho</span><span style="font-size:12px;color:#75798c">Speaker name · 20px / 500</span></div>
+<div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid rgba(233,233,237,.08);padding-bottom:8px"><span class="m" style="font-size:13px;color:#b2b6ca">00:11:04.2 → 00:11:52.8</span><span style="font-size:12px;color:#75798c">Timecode · JetBrains Mono 13px</span></div>
+<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9184d9">MARKING</span><span style="font-size:12px;color:#75798c">Label · 11px / uppercase</span></div>
+</div>
+<p style="margin:14px 0 0;font-size:13px;color:#9397ab">Spacing is a 4px scale (4·8·12·16·24·32). Radius 8px on panels, 6px on controls, 3px on marker blocks. Speaker tiles never fall below <b>72px tall</b> or <b>160px wide</b>; every other click target is at least 32px. All timecodes are monospaced so digits do not jitter while counting.</p>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">03</span><h2 style="font-size:27px">Screen flow</h2></div>
+<div style="display:flex;align-items:center;gap:0;flex-wrap:wrap">
+<div style="background:#232532;box-shadow:0 0 0 1px #3f424d;border-radius:8px;padding:14px 18px;min-width:160px"><div class="m" style="font-size:11px;color:#75798c;margin-bottom:3px">S1</div><div style="font-size:15px">Library</div><div style="font-size:12px;color:#75798c">past sessions, new meeting</div></div>
+<div style="width:34px;height:1px;background:#5d5294"></div>
+<div style="background:#232532;box-shadow:0 0 0 1px #3f424d;border-radius:8px;padding:14px 18px;min-width:160px"><div class="m" style="font-size:11px;color:#75798c;margin-bottom:3px">S2</div><div style="font-size:15px">Setup</div><div style="font-size:12px;color:#75798c">roster, presets, input check</div></div>
+<div style="width:34px;height:1px;background:#5d5294"></div>
+<div style="background:#2b2741;box-shadow:0 0 0 1px #5d5294;border-radius:8px;padding:14px 18px;min-width:200px"><div class="m" style="font-size:11px;color:#b5abfc;margin-bottom:3px">S3 + S4</div><div style="font-size:15px">Record, mark, repair</div><div style="font-size:12px;color:#b2b6ca">one screen, never left</div></div>
+<div style="width:34px;height:1px;background:#5d5294"></div>
+<div style="background:#232532;box-shadow:0 0 0 1px #3f424d;border-radius:8px;padding:14px 18px;min-width:160px"><div class="m" style="font-size:11px;color:#75798c;margin-bottom:3px">S5</div><div style="font-size:15px">Stop &amp; export</div><div style="font-size:12px;color:#75798c">mp3 + md written</div></div>
+</div>
+<p style="margin:0;font-size:14px;color:#9397ab;max-width:900px">Adding, renaming and deleting speakers mid-recording, and repairing marks, both happen <b>inside S3</b> — S4 is a dock that grows from the bottom of the same window, not a separate page. There is no route out of S3 except Stop, and Stop always asks once.</p>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">04</span><h2 style="font-size:27px">S3 · Recording</h2><span style="font-size:13px;color:#75798c">live mockup — click a tile or press 1–9 / 0</span></div>
+
+<div style="width:1360px;flex:0 0 auto;border-radius:10px;overflow:hidden;background:#161826;box-shadow:0 0 0 1px #3f424d, 0 30px 80px rgba(0,0,0,.55)" data-screen-label="S3 Recording">
+<div style="height:40px;background:#1a1c29;border-bottom:1px solid rgba(233,233,237,.08);display:flex;align-items:center;padding:0 4px 0 14px;gap:12px">
+<div style="width:12px;height:12px;border-radius:3px;background:#9184d9"></div>
+<span style="font-size:12.5px;color:#b2b6ca">Meeting Recorder — Weekly Product Review</span>
+<span style="flex:1"></span>
+<span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">─</span>
+<span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:12px">☐</span>
+<span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">✕</span>
+</div>
+
+<div style="padding:16px 20px 12px;display:flex;align-items:center;gap:24px;border-bottom:1px solid rgba(233,233,237,.07)">
+<div style="display:flex;align-items:center;gap:14px">
+<div style="width:11px;height:11px;border-radius:50%;background:{{ recDot }};box-shadow:0 0 12px {{ recDot }}"></div>
+<div class="n" style="font-size:38px;line-height:1;letter-spacing:-.02em">{{ clock }}</div>
+</div>
+<div style="display:flex;gap:26px">
+<div><div style="font-size:11px;color:#75798c">Marks</div><div class="n" style="font-size:17px">{{ markCount }}</div></div>
+<div><div style="font-size:11px;color:#75798c">Speaking now</div><div style="font-size:17px;color:{{ activeColor }}">{{ activeName }}</div></div>
+<div><div style="font-size:11px;color:#75798c">Input</div><div style="font-size:17px">PC mic · Realtek</div></div>
+<div><div style="font-size:11px;color:#75798c">Written to disk</div><div class="n" style="font-size:17px">{{ diskMB }} MB</div></div>
+</div>
+<span style="flex:1"></span>
+<div onClick="{{ onUndo }}" style="height:36px;padding:0 14px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;gap:7px;font-size:13.5px;color:#b2b6ca;cursor:pointer">↺ Undo <span class="m" style="font-size:11px;color:#75798c">Ctrl+Z</span></div>
+<div style="height:36px;padding:0 14px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;gap:7px;font-size:13.5px;color:#b2b6ca">⏸ Pause <span class="m" style="font-size:11px;color:#75798c">Ctrl+P</span></div>
+<div style="height:36px;padding:0 16px;border-radius:6px;box-shadow:0 0 0 1px #5d3038;background:rgba(229,128,149,.1);display:flex;align-items:center;gap:7px;font-size:13.5px;color:#e58095">■ Stop <span class="m" style="font-size:11px;color:#a5636f">Esc</span></div>
+</div>
+
+<div style="padding:14px 20px 0">
+<div style="height:132px;border-radius:8px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d;position:relative;overflow:hidden;display:flex;align-items:center;gap:2px;padding:0 10px">
+<sc-for list="{{ bars }}" as="b" hint-placeholder-count="120">
+<div style="flex:1;min-width:2px;border-radius:1px;background:{{ b.c }};height:{{ b.h }}"></div>
+</sc-for>
+<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(233,233,237,.07)"></div>
+<div style="position:absolute;top:0;bottom:0;right:10px;width:2px;background:#e9e9ed;opacity:.5"></div>
+<div style="position:absolute;top:8px;left:14px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#595d6c">Live · last 45 s</div>
+</div>
+<div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+<span style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#595d6c;width:64px">Minimap</span>
+<div style="flex:1;height:38px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d;position:relative;overflow:hidden">
+<sc-for list="{{ mini }}" as="m" hint-placeholder-count="5">
+<div style="position:absolute;top:6px;bottom:6px;left:{{ m.left }};width:{{ m.width }};background:{{ m.color }};border-radius:3px;opacity:.85"></div>
+</sc-for>
+<div style="position:absolute;top:0;bottom:0;left:{{ viewLeft }};width:{{ viewWidth }};box-shadow:0 0 0 1.5px #e9e9ed;border-radius:4px;background:rgba(233,233,237,.06)"></div>
+</div>
+<span class="m" style="font-size:11px;color:#75798c">{{ clock }} / whole session</span>
+</div>
+</div>
+
+<div style="padding:16px 20px 0;display:flex;align-items:baseline;gap:12px">
+<span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab">Speakers · {{ countLabel }}</span>
+<span style="font-size:12px;color:#75798c">keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.</span>
+<span style="flex:1"></span>
+<span style="font-size:12.5px;color:#b5abfc">＋ Add speaker <span class="m" style="font-size:11px;color:#75798c">Ctrl+N</span></span>
+</div>
+
+<div style="padding:10px 20px 0">
+<div style="display:grid;grid-template-columns:{{ gridCols }};gap:10px">
+<sc-for list="{{ speakers }}" as="s" hint-placeholder-count="6">
+<div onClick="{{ s.onTap }}" style="height:{{ s.h }};border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;background:{{ s.bg }};box-shadow:{{ s.ring }};position:relative;overflow:hidden">
+<div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:{{ s.color }}"></div>
+<div style="display:flex;align-items:baseline;gap:8px">
+<span class="m" style="font-size:11px;color:{{ s.numColor }}">{{ s.key }}</span>
+<span style="font-size:19px;font-weight:500;color:{{ s.nameColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+</div>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+<span style="font-size:12px;color:#75798c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.role }}</span>
+<span class="n" style="font-size:12.5px;color:{{ s.metaColor }}">{{ s.meta }}</span>
+</div>
+</div>
+</sc-for>
+<div style="height:{{ tileH }};border-radius:8px;box-shadow:0 0 0 1px #423a6a;display:flex;align-items:center;justify-content:center;gap:8px;color:#b5abfc;font-size:14px;cursor:pointer">＋ Add</div>
+</div>
+</div>
+
+<div style="margin:16px 0 0;background:#1a1c29;border-top:1px solid rgba(233,233,237,.1);padding:12px 20px 16px">
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+<span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9184d9">Marks · live repair</span>
+<span style="font-size:12px;color:#75798c">recording continues while you edit</span>
+<span style="flex:1"></span>
+<span style="font-size:12px;color:#b2b6ca;padding:5px 10px;border-radius:6px;box-shadow:0 0 0 1px #3f424d">Recent</span>
+<span style="font-size:12px;color:#b5abfc;padding:5px 10px;border-radius:6px;box-shadow:0 0 0 1px #423a6a">Expand ⌃ <span class="m" style="font-size:11px;color:#75798c">Ctrl+E</span></span>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<sc-for list="{{ recent }}" as="r" hint-placeholder-count="3">
+<div style="display:flex;align-items:center;gap:12px;background:#232532;border-radius:6px;padding:9px 12px">
+<span style="width:3px;align-self:stretch;border-radius:2px;background:{{ r.color }}"></span>
+<span class="m" style="font-size:11px;color:#75798c;width:22px">{{ r.key }}</span>
+<span style="font-size:14px;width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.name }}</span>
+<span class="m" style="font-size:13px;color:#b2b6ca;width:210px">{{ r.range }}</span>
+<span class="n" style="font-size:12.5px;color:#75798c;width:52px">{{ r.dur }}</span>
+<span style="flex:1"></span>
+<span onClick="{{ r.onNudgeStart }}" style="font-size:12px;color:#b5abfc;padding:5px 9px;border-radius:5px;box-shadow:0 0 0 1px #423a6a;cursor:pointer">start −0.5s</span>
+<span onClick="{{ r.onNudgeEnd }}" style="font-size:12px;color:#b5abfc;padding:5px 9px;border-radius:5px;box-shadow:0 0 0 1px #423a6a;cursor:pointer">end +0.5s</span>
+<span style="font-size:12px;color:#b2b6ca;padding:5px 9px;border-radius:5px;box-shadow:0 0 0 1px #3f424d;cursor:pointer">reassign ▾</span>
+<span onClick="{{ r.onDelete }}" style="font-size:13px;color:#e58095;padding:5px 9px;cursor:pointer">✕</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">05</span><h2 style="font-size:27px">Auto-shrinking grid · 2 → 12</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:18px">
+<div style="flex:0 0 250px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:18px">
+<div style="font-size:13px;color:#9184d9;margin-bottom:2px">2 – 4 speakers</div><div style="font-size:12px;color:#75798c;margin-bottom:12px">2 cols · 148px tall · name 24px</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="height:52px;border-radius:6px;background:#2b2741;box-shadow:0 0 0 1px #423a6a"></div><div style="height:52px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:52px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:52px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div></div>
+<p style="margin:12px 0 0;font-size:12.5px;color:#9397ab">Room to spare, so each tile also carries a small talk-time bar on the right.</p>
+</div>
+<div style="flex:0 0 250px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:18px">
+<div style="font-size:13px;color:#9184d9;margin-bottom:2px">5 – 6</div><div style="font-size:12px;color:#75798c;margin-bottom:12px">3 cols · 116px · name 19px</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px"><div style="height:40px;border-radius:6px;background:#2b2741;box-shadow:0 0 0 1px #423a6a"></div><div style="height:40px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:40px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:40px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:40px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:40px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div></div>
+<p style="margin:12px 0 0;font-size:12.5px;color:#9397ab">The default. Role and cumulative time share one line.</p>
+</div>
+<div style="flex:0 0 250px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:18px">
+<div style="font-size:13px;color:#9184d9;margin-bottom:2px">7 – 9</div><div style="font-size:12px;color:#75798c;margin-bottom:12px">3 cols · 96px · name 17px</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"><div style="height:30px;border-radius:5px;background:#2b2741;box-shadow:0 0 0 1px #423a6a"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:30px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div></div>
+<p style="margin:12px 0 0;font-size:12.5px;color:#9397ab">Role text drops to a coloured dot; cumulative time stays.</p>
+</div>
+<div style="flex:0 0 250px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:18px">
+<div style="font-size:13px;color:#9184d9;margin-bottom:2px">10 – 12</div><div style="font-size:12px;color:#75798c;margin-bottom:12px">4 cols · 76px · name 16px</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px"><div style="height:24px;border-radius:5px;background:#2b2741;box-shadow:0 0 0 1px #423a6a"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div><div style="height:24px;border-radius:5px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d"></div></div>
+<p style="margin:12px 0 0;font-size:12.5px;color:#9397ab">Name and time only. Twelve tiles must fit without scrolling at the minimum window height.</p>
+</div>
+<div style="flex:1 1 300px;min-width:290px;background:#1c1e2c;border-radius:8px;box-shadow:0 0 0 1px #2c2f3d;padding:18px">
+<div style="font-size:13px;color:#9397ab;margin-bottom:10px">Grid rules</div>
+<div style="display:flex;flex-direction:column;gap:9px;font-size:13px;color:#cfd3e5">
+<div>· Column count and tile height are derived from speaker count alone. The user cannot set them.</div>
+<div>· Tile order is roster order, fixed for the whole session. Never sort by talk time — a moving target defeats muscle memory.</div>
+<div>· Widening the window widens tiles; it does not add columns. Height above the minimum goes to the marks dock.</div>
+<div>· Minimum window: <span class="m" style="font-size:12px">1180 × 760</span>. Below that the app refuses to shrink further.</div>
+<div>· Above 12 speakers, the grid scrolls and the header warns: mark absent participants instead.</div>
+</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">06</span><h2 style="font-size:27px">S4 · Marks dock, expanded</h2><span style="font-size:13px;color:#75798c">detail crop — the top of the window is unchanged and still recording</span></div>
+<div style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start">
+<div style="width:1000px;flex:0 0 auto;border-radius:10px;overflow:hidden;background:#161826;box-shadow:0 0 0 1px #3f424d, 0 30px 80px rgba(0,0,0,.5)" data-screen-label="S4 Marks dock">
+<div style="padding:12px 20px;display:flex;align-items:center;gap:20px;background:#1a1c29;border-bottom:1px solid rgba(233,233,237,.08)">
+<div style="width:10px;height:10px;border-radius:50%;background:#e58095;box-shadow:0 0 12px #e58095"></div>
+<div class="n" style="font-size:26px;line-height:1">00:12:41</div>
+<div style="display:flex;align-items:center;gap:8px"><span style="width:3px;height:20px;border-radius:2px;background:#e58095"></span><span style="font-size:13.5px;color:#b2b6ca">Lee Jun-ho speaking · 00:14</span></div>
+<span style="flex:1"></span>
+<span style="font-size:12px;color:#75798c">grid and waveform above are untouched — cropped for this figure</span>
+</div>
+<div style="padding:14px 20px 6px">
+<div style="height:34px;border-radius:6px;background:#1c1e2c;box-shadow:0 0 0 1px #2c2f3d;position:relative;overflow:hidden">
+<div style="position:absolute;top:5px;bottom:5px;left:3%;width:15%;background:#9184d9;border-radius:3px"></div>
+<div style="position:absolute;top:5px;bottom:5px;left:20%;width:9%;background:#d182c9;border-radius:3px"></div>
+<div style="position:absolute;top:5px;bottom:5px;left:31%;width:22%;background:#e58095;border-radius:3px"></div>
+<div style="position:absolute;top:5px;bottom:5px;left:55%;width:7%;background:#e58e6c;border-radius:3px"></div>
+<div style="position:absolute;top:5px;bottom:5px;left:64%;width:13%;background:#9184d9;border-radius:3px"></div>
+<div style="position:absolute;top:5px;bottom:5px;left:79%;width:18%;background:#e58095;border-radius:3px;box-shadow:0 0 0 1.5px #f7d5dc"></div>
+<div style="position:absolute;top:0;bottom:0;right:0;width:2px;background:#e9e9ed;opacity:.6"></div>
+</div>
+</div>
+<div style="background:#1a1c29;border-top:1px solid rgba(233,233,237,.12);margin-top:10px;padding:14px 20px 18px">
+<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+<div><div style="font-size:16px;font-weight:500">Marks <span class="n" style="color:#75798c;font-weight:400">38</span></div><div style="font-size:11.5px;color:#75798c">newest first · one row open at a time</div></div>
+<span style="flex:1"></span>
+<span style="font-size:12px;color:#b5abfc;padding:5px 10px;border-radius:6px;box-shadow:0 0 0 1px #423a6a">All</span>
+<span style="font-size:12px;color:#b2b6ca;padding:5px 10px;border-radius:6px;box-shadow:0 0 0 1px #3f424d">Last 5 min</span>
+<span style="font-size:12px;color:#b2b6ca;padding:5px 10px;border-radius:6px;box-shadow:0 0 0 1px #3f424d">Under 2 s</span>
+<span style="font-size:12px;color:#b2b6ca;padding:5px 10px;border-radius:6px;box-shadow:0 0 0 1px #3f424d">Collapse ⌄</span>
+</div>
+
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1.5px #9184d9;padding:14px;display:flex;flex-direction:column;gap:12px;margin-bottom:8px">
+<div style="display:flex;align-items:center;gap:12px">
+<span style="width:3px;height:20px;border-radius:2px;background:#e58095"></span>
+<span class="m" style="font-size:11px;color:#75798c">03</span>
+<span style="font-size:15px">Lee Jun-ho</span>
+<span style="font-size:12px;color:#b5abfc;padding:4px 9px;border-radius:5px;box-shadow:0 0 0 1px #423a6a">reassign ▾</span>
+<span style="flex:1"></span>
+<span style="font-size:11.5px;color:#75798c">editing does not pause the recorder</span>
+</div>
+<div style="display:flex;gap:10px;align-items:stretch">
+<div style="flex:1;display:flex;align-items:center;gap:8px;background:#1c1e2c;border-radius:6px;padding:8px 10px">
+<span style="width:30px;height:30px;border-radius:5px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:14px;color:#b2b6ca">−</span>
+<div style="flex:1;text-align:center"><div style="font-size:10px;color:#75798c">Start</div><div class="m" style="font-size:15px">00:11:04.2</div></div>
+<span style="width:30px;height:30px;border-radius:5px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:14px;color:#b2b6ca">+</span>
+</div>
+<div style="flex:1;display:flex;align-items:center;gap:8px;background:#1c1e2c;border-radius:6px;padding:8px 10px">
+<span style="width:30px;height:30px;border-radius:5px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:14px;color:#b2b6ca">−</span>
+<div style="flex:1;text-align:center"><div style="font-size:10px;color:#75798c">End</div><div class="m" style="font-size:15px">00:11:52.8</div></div>
+<span style="width:30px;height:30px;border-radius:5px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:14px;color:#b2b6ca">+</span>
+</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;background:#1c1e2c;border-radius:6px;padding:8px 10px">
+<div style="text-align:center"><div style="font-size:10px;color:#75798c">Duration</div><div class="m" style="font-size:15px">48.6 s</div></div>
+</div>
+</div>
+<div style="display:flex;gap:8px">
+<span style="flex:1;height:36px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13px;color:#b2b6ca">▶ Audition range</span>
+<span style="flex:1;height:36px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13px;color:#b2b6ca">⤈ Split at playhead</span>
+<span style="flex:1;height:36px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13px;color:#b2b6ca">⤊ Merge with previous</span>
+<span style="flex:1;height:36px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;gap:7px;font-size:13px;color:#b2b6ca">＋ Insert mark before</span>
+<span style="width:44px;height:36px;border-radius:6px;box-shadow:0 0 0 1px #5d3038;display:flex;align-items:center;justify-content:center;font-size:14px;color:#e58095">✕</span>
+</div>
+<div style="font-size:11.5px;color:#75798c">Audition needs headphones — with speakers active the button reads “Connect headphones to audition” and is disabled, to avoid feeding playback back into the recording.</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:12px;background:#232532;border-radius:6px;padding:10px 12px"><span style="width:3px;height:18px;border-radius:2px;background:#e58e6c"></span><span class="m" style="font-size:11px;color:#75798c;width:22px">04</span><span style="font-size:14px;width:130px">Choi Min-ah</span><span class="m" style="font-size:13px;color:#b2b6ca;width:210px">00:10:31.0 → 00:11:02.4</span><span class="n" style="font-size:12.5px;color:#75798c">31.4 s</span><span style="flex:1"></span><span style="font-size:12px;color:#75798c">click to edit</span></div>
+<div style="display:flex;align-items:center;gap:12px;background:#232532;border-radius:6px;padding:10px 12px"><span style="width:3px;height:18px;border-radius:2px;background:#9184d9"></span><span class="m" style="font-size:11px;color:#75798c;width:22px">01</span><span style="font-size:14px;width:130px">Kim Do-hyun</span><span class="m" style="font-size:13px;color:#b2b6ca;width:210px">00:09:58.6 → 00:10:29.1</span><span class="n" style="font-size:12.5px;color:#75798c">30.5 s</span><span style="flex:1"></span></div>
+<div style="display:flex;align-items:center;gap:12px;background:#232532;border-radius:6px;padding:10px 12px;box-shadow:0 0 0 1px #5d3038"><span style="width:3px;height:18px;border-radius:2px;background:#d182c9"></span><span class="m" style="font-size:11px;color:#75798c;width:22px">02</span><span style="font-size:14px;width:130px">Park Seo-yeon</span><span class="m" style="font-size:13px;color:#b2b6ca;width:210px">00:09:57.9 → 00:09:58.6</span><span class="n" style="font-size:12.5px;color:#e58095">0.7 s</span><span style="flex:1"></span><span style="font-size:12px;color:#e58095">Suspiciously short — merge or delete?</span></div>
+<div style="display:flex;align-items:center;gap:12px;background:#232532;border-radius:6px;padding:10px 12px;opacity:.6"><span style="width:3px;height:18px;border-radius:2px;background:#e58095"></span><span class="m" style="font-size:11px;color:#75798c;width:22px">03</span><span style="font-size:14px;width:130px">Lee Jun-ho</span><span class="m" style="font-size:13px;color:#b2b6ca;width:210px">00:08:40.2 → 00:09:10.0</span><span class="n" style="font-size:12.5px;color:#75798c">29.8 s</span><span style="flex:1"></span></div>
+</div>
+</div>
+</div>
+
+<div style="flex:1 1 320px;min-width:300px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:18px">Dock rules</h3>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5"><b style="color:#e9e9ed">The recording UI never disappears.</b> Expanding the dock takes space from the speaker grid's spare height and from the live waveform (132px → 72px), never from the timecode, the speaker tiles or the Stop button.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5"><b style="color:#e9e9ed">No modals, ever.</b> Reassign is an inline dropdown; delete is immediate with a 6-second undo toast. A confirmation dialog in the middle of a meeting is a dialog nobody reads.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5"><b style="color:#e9e9ed">0.5 s nudge step,</b> 0.1 s on key-repeat. Start can never pass end. If an edit overlaps a neighbour, the neighbour is trimmed and a toast says which one.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5"><b style="color:#e9e9ed">The app flags its own suspects.</b> Marks under 2 seconds, and gaps under 0.3 s between two marks of different speakers, get a red hairline and a one-line hint. This is the single most valuable feature for transcript quality.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5"><b style="color:#e9e9ed">Keys live on the preset.</b> Each roster row carries its own hotkey cell, and a preset stores names, roles, slot colours and key assignments together. Two speakers can never hold the same key — the cell rejects an already-taken combination at keystroke time rather than accepting it and warning later. A speaker added mid-session with Ctrl+N takes the lowest free key automatically, so marking continues without a dialog.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5"><b style="color:#e9e9ed">Editing is journalled.</b> Every edit appends to an on-disk operation log, so a crash mid-meeting loses at most the last operation, never the session.</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">07</span><h2 style="font-size:27px">S2 · Setup &amp; S1 · Library</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start">
+
+<div style="width:820px;flex:0 0 auto;border-radius:10px;overflow:hidden;background:#161826;box-shadow:0 0 0 1px #3f424d, 0 24px 60px rgba(0,0,0,.45)" data-screen-label="S2 Setup">
+<div style="height:40px;background:#1a1c29;border-bottom:1px solid rgba(233,233,237,.08);display:flex;align-items:center;padding:0 4px 0 14px;gap:12px"><div style="width:12px;height:12px;border-radius:3px;background:#9184d9"></div><span style="font-size:12.5px;color:#b2b6ca">New meeting — setup</span><span style="flex:1"></span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">─</span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:12px">☐</span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">✕</span></div>
+<div style="display:flex;gap:0;align-items:stretch">
+<div style="flex:1 1 0;min-width:0;padding:20px;border-right:1px solid rgba(233,233,237,.07)">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab;margin-bottom:10px">Meeting</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:11px 13px;margin-bottom:8px"><div style="font-size:10px;color:#75798c">Title</div><div style="font-size:15px">Weekly Product Review</div></div>
+<div style="display:flex;gap:8px;margin-bottom:20px">
+<div style="flex:1;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:11px 13px"><div style="font-size:10px;color:#75798c">Date &amp; time</div><div class="m" style="font-size:14px">2026-03-12 14:00</div></div>
+<div style="flex:1;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:11px 13px"><div style="font-size:10px;color:#75798c">Room</div><div style="font-size:14px">3F Meeting Room</div></div>
+</div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab">Load a preset</span><span style="font-size:12px;color:#b5abfc">Manage</span></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">
+<div style="padding:8px 13px;border-radius:18px;background:rgba(145,132,217,.16);box-shadow:0 0 0 1px #9184d9;font-size:13px;color:#d2cefd">Product team · 6</div>
+<div style="padding:8px 13px;border-radius:18px;box-shadow:0 0 0 1px #3f424d;font-size:13px;color:#b2b6ca">All hands · 12</div>
+<div style="padding:8px 13px;border-radius:18px;box-shadow:0 0 0 1px #3f424d;font-size:13px;color:#b2b6ca">1:1 · 2</div>
+</div>
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab;margin-bottom:10px">Input check</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:13px">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><span style="font-size:14px">Built-in mic array · Realtek</span><span style="font-size:12px;color:#b5abfc">Change ▾</span></div>
+<div style="height:8px;border-radius:4px;background:#1c1e2c;overflow:hidden;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:62%;background:linear-gradient(to right,#4ec39b,#c9a04f)"></div></div>
+<div style="display:flex;justify-content:space-between;margin-top:6px"><span class="m" style="font-size:11px;color:#75798c">−48 dB</span><span style="font-size:11.5px;color:#4ec39b">Level good — say something to test</span><span class="m" style="font-size:11px;color:#75798c">0 dB</span></div>
+<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(233,233,237,.07);display:flex;justify-content:space-between;font-size:12.5px;color:#b2b6ca"><span>Free disk space</span><span class="m">214 GB · ≈ 380 h at 128 kbps</span></div>
+</div>
+</div>
+<div style="flex:1 1 0;min-width:0;padding:20px">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab">Roster · 6</span><span style="font-size:12px;color:#75798c">drag to reorder · click a key cell to reassign</span></div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:10px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:9px 11px"><span class="m" style="width:26px;height:26px;border-radius:6px;background:rgba(145,132,217,.2);box-shadow:0 0 0 1px #9184d9;display:flex;align-items:center;justify-content:center;font-size:11px;color:#d2cefd">1</span><div style="flex:1"><div style="font-size:14.5px">Kim Do-hyun</div><div style="font-size:11px;color:#75798c">Product</div></div><span class="m" style="font-size:11.5px;color:#d2cefd;padding:4px 8px;border-radius:5px;box-shadow:0 0 0 1px #423a6a">Alt+1</span><span style="font-size:13px;color:#75798c">⋮⋮</span></div>
+<div style="display:flex;align-items:center;gap:10px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:9px 11px"><span class="m" style="width:26px;height:26px;border-radius:6px;background:rgba(209,130,201,.2);box-shadow:0 0 0 1px #d182c9;display:flex;align-items:center;justify-content:center;font-size:11px;color:#f0cfec">2</span><div style="flex:1"><div style="font-size:14.5px">Park Seo-yeon</div><div style="font-size:11px;color:#75798c">Design</div></div><span class="m" style="font-size:11.5px;color:#d2cefd;padding:4px 8px;border-radius:5px;box-shadow:0 0 0 1px #423a6a">Alt+2</span><span style="font-size:13px;color:#75798c">⋮⋮</span></div>
+<div style="display:flex;align-items:center;gap:10px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:9px 11px"><span class="m" style="width:26px;height:26px;border-radius:6px;background:rgba(229,128,149,.2);box-shadow:0 0 0 1px #e58095;display:flex;align-items:center;justify-content:center;font-size:11px;color:#f7d5dc">3</span><div style="flex:1"><div style="font-size:14.5px">Lee Jun-ho</div><div style="font-size:11px;color:#75798c">Engineering</div></div><span class="m" style="font-size:11.5px;color:#d2cefd;padding:4px 8px;border-radius:5px;box-shadow:0 0 0 1px #423a6a">Alt+3</span><span style="font-size:13px;color:#75798c">⋮⋮</span></div>
+<div style="display:flex;align-items:center;gap:10px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:9px 11px"><span class="m" style="width:26px;height:26px;border-radius:6px;background:rgba(229,142,108,.2);box-shadow:0 0 0 1px #e58e6c;display:flex;align-items:center;justify-content:center;font-size:11px;color:#f7dccf">4</span><div style="flex:1"><div style="font-size:14.5px">Choi Min-ah</div><div style="font-size:11px;color:#75798c">Data</div></div><span class="m" style="font-size:11.5px;color:#d2cefd;padding:4px 8px;border-radius:5px;box-shadow:0 0 0 1px #423a6a">Alt+4</span><span style="font-size:13px;color:#75798c">⋮⋮</span></div>
+<div style="display:flex;align-items:center;gap:10px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:9px 11px;opacity:.45"><span class="m" style="width:26px;height:26px;border-radius:6px;background:rgba(201,160,79,.2);box-shadow:0 0 0 1px #c9a04f;display:flex;align-items:center;justify-content:center;font-size:11px;color:#efe0c2">5</span><div style="flex:1"><div style="font-size:14.5px">Jung Woo-sung</div><div style="font-size:11px;color:#75798c">Marked absent — tile stays dimmed, key stays reserved</div></div><span class="m" style="font-size:11.5px;color:#75798c;padding:4px 8px;border-radius:5px;box-shadow:0 0 0 1px #3f424d">Alt+5</span><span style="font-size:13px;color:#75798c">⋮⋮</span></div>
+<div style="display:flex;align-items:center;gap:10px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:9px 11px"><span class="m" style="width:26px;height:26px;border-radius:6px;background:rgba(162,176,79,.2);box-shadow:0 0 0 1px #a2b04f;display:flex;align-items:center;justify-content:center;font-size:11px;color:#e6ecc7">6</span><div style="flex:1"><div style="font-size:14.5px">Han Ji-min</div><div style="font-size:11px;color:#75798c">Marketing</div></div><span class="m" style="font-size:11.5px;color:#d2cefd;padding:4px 8px;border-radius:5px;box-shadow:0 0 0 1px #423a6a">Alt+6</span><span style="font-size:13px;color:#75798c">⋮⋮</span></div>
+<div style="height:42px;border-radius:8px;box-shadow:0 0 0 1px #423a6a;display:flex;align-items:center;justify-content:center;gap:7px;color:#b5abfc;font-size:13.5px">＋ Add speaker</div>
+</div>
+<div style="margin-top:18px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab;margin-bottom:10px">Recording options</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;overflow:hidden">
+<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid rgba(233,233,237,.07)"><span style="font-size:13.5px">Format</span><span class="m" style="font-size:12.5px;color:#b5abfc">MP3 · 128 kbps · 44.1 kHz mono</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid rgba(233,233,237,.07)"><span style="font-size:13.5px">Allow overlapping marks</span><span style="width:38px;height:22px;border-radius:11px;box-shadow:0 0 0 1px #3f424d;position:relative"><span style="position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#75798c"></span></span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 13px"><span style="font-size:13.5px">Mark start offset</span><span class="m" style="font-size:12.5px;color:#b5abfc">−0.8 s</span></div>
+</div>
+<p style="margin:9px 2px 0;font-size:11.5px;color:#75798c">A human presses the key after the speaker has already begun. Every mark start is shifted back by this offset automatically; the raw press time is kept in the log so the offset can be re-tuned later.</p>
+</div>
+</div>
+<div style="padding:14px 20px;border-top:1px solid rgba(233,233,237,.1);display:flex;gap:10px;align-items:center">
+<span style="font-size:12.5px;color:#75798c">Session folder</span><span class="m" style="font-size:12px;color:#b2b6ca">D:\Meetings\2026-03-12_weekly-product-review\</span>
+<span style="flex:1"></span>
+<div style="height:40px;padding:0 15px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;font-size:13.5px;color:#b2b6ca">Save as preset</div>
+<div style="height:40px;padding:0 20px;border-radius:6px;box-shadow:0 0 0 1.5px #9184d9;background:rgba(145,132,217,.12);display:flex;align-items:center;gap:8px;font-size:14.5px;color:#d2cefd">● Start recording <span class="m" style="font-size:11.5px;color:#9184d9">Ctrl+R</span></div>
+</div>
+</div>
+
+<div style="flex:1 1 420px;min-width:400px;display:flex;flex-direction:column;gap:18px">
+<div style="border-radius:10px;overflow:hidden;background:#161826;box-shadow:0 0 0 1px #3f424d, 0 24px 60px rgba(0,0,0,.45)" data-screen-label="S1 Library">
+<div style="height:40px;background:#1a1c29;border-bottom:1px solid rgba(233,233,237,.08);display:flex;align-items:center;padding:0 4px 0 14px;gap:12px"><div style="width:12px;height:12px;border-radius:3px;background:#9184d9"></div><span style="font-size:12.5px;color:#b2b6ca">Meeting Recorder</span><span style="flex:1"></span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">─</span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:12px">☐</span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">✕</span></div>
+<div style="padding:20px">
+<div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:18px">
+<div><h3 style="font-size:24px">Sessions</h3><div style="font-size:12.5px;color:#75798c">stored locally · nothing leaves this machine</div></div>
+<span style="flex:1"></span>
+<div style="height:40px;padding:0 18px;border-radius:6px;box-shadow:0 0 0 1.5px #9184d9;background:rgba(145,132,217,.12);display:flex;align-items:center;gap:8px;font-size:14px;color:#d2cefd">＋ New meeting</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:7px">
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:13px 15px;display:flex;align-items:center;gap:14px">
+<div style="flex:1;min-width:0"><div style="font-size:15px">Weekly Product Review</div><div class="m" style="font-size:11.5px;color:#75798c">2026-03-05 14:02 · 52:18 · 6 speakers · 41 marks</div></div>
+<div style="width:150px;height:22px;border-radius:4px;background:#1c1e2c;position:relative;overflow:hidden"><div style="position:absolute;top:5px;bottom:5px;left:2%;width:18%;background:#9184d9;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:22%;width:11%;background:#d182c9;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:35%;width:25%;background:#e58095;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:62%;width:9%;background:#e58e6c;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:73%;width:24%;background:#a2b04f;border-radius:2px"></div></div>
+<span class="m" style="font-size:11.5px;color:#4ec39b">mp3 + md</span>
+<span style="font-size:12.5px;color:#b5abfc">Open folder</span>
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:13px 15px;display:flex;align-items:center;gap:14px">
+<div style="flex:1;min-width:0"><div style="font-size:15px">Q1 Planning — All hands</div><div class="m" style="font-size:11.5px;color:#75798c">2026-02-27 10:00 · 1:14:40 · 12 speakers · 96 marks</div></div>
+<div style="width:150px;height:22px;border-radius:4px;background:#1c1e2c;position:relative;overflow:hidden"><div style="position:absolute;top:5px;bottom:5px;left:1%;width:9%;background:#9184d9;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:12%;width:7%;background:#4ec1bd;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:21%;width:14%;background:#e58e6c;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:37%;width:6%;background:#7aabf0;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:45%;width:19%;background:#c9a04f;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:66%;width:12%;background:#74bd6f;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:80%;width:17%;background:#d182c9;border-radius:2px"></div></div>
+<span class="m" style="font-size:11.5px;color:#4ec39b">mp3 + md</span>
+<span style="font-size:12.5px;color:#b5abfc">Open folder</span>
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:13px 15px;display:flex;align-items:center;gap:14px">
+<div style="flex:1;min-width:0"><div style="font-size:15px">Vendor call — Acme</div><div class="m" style="font-size:11.5px;color:#75798c">2026-02-24 16:30 · 28:04 · 3 speakers · 22 marks</div></div>
+<div style="width:150px;height:22px;border-radius:4px;background:#1c1e2c;position:relative;overflow:hidden"><div style="position:absolute;top:5px;bottom:5px;left:3%;width:30%;background:#9184d9;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:36%;width:26%;background:#e58095;border-radius:2px"></div><div style="position:absolute;top:5px;bottom:5px;left:65%;width:31%;background:#4ec39b;border-radius:2px"></div></div>
+<span class="m" style="font-size:11.5px;color:#c9a04f">mp3 only</span>
+<span style="font-size:12.5px;color:#b5abfc">Open folder</span>
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #5d3038;padding:13px 15px;display:flex;align-items:center;gap:14px">
+<div style="flex:1;min-width:0"><div style="font-size:15px">Design sync <span style="font-size:12px;color:#e58095">· recovered</span></div><div class="m" style="font-size:11.5px;color:#75798c">2026-02-20 11:00 · 19:47 · app closed unexpectedly</div></div>
+<span style="font-size:12.5px;color:#e58095">Finish export</span>
+</div>
+</div>
+<p style="margin:16px 0 0;font-size:12.5px;color:#75798c">A row is one folder. Deleting a session in the app only unlists it; the guide instructs the agent never to delete the user's audio.</p>
+</div>
+</div>
+
+<div style="border-radius:10px;overflow:hidden;background:#1a1c29;box-shadow:0 0 0 1px #5d5294, 0 18px 44px rgba(0,0,0,.6);padding:0" data-screen-label="Mini bar">
+<div style="padding:12px 14px 8px;display:flex;align-items:center;gap:10px">
+<div style="width:9px;height:9px;border-radius:50%;background:#e58095;box-shadow:0 0 10px #e58095"></div>
+<div style="display:flex;flex-direction:column;gap:1px;flex:1">
+<div style="font-size:15px"><span style="color:#f7d5dc">Lee Jun-ho</span> <span style="color:#75798c">opened</span></div>
+<div style="font-size:12.5px;color:#9397ab">Kim Do-hyun closed at <span class="m">00:12:41.3</span> · 31.4 s</div>
+</div>
+<div class="n" style="font-size:20px;line-height:1;color:#b2b6ca">00:12:41</div>
+</div>
+<div style="padding:0 14px 12px;display:flex;align-items:center;gap:12px">
+<div style="display:flex;gap:5px">
+<span class="m" style="width:30px;height:30px;border-radius:5px;background:#232532;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:12px;color:#b2b6ca">1</span>
+<span class="m" style="width:30px;height:30px;border-radius:5px;background:#232532;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:12px;color:#b2b6ca">2</span>
+<span class="m" style="width:30px;height:30px;border-radius:5px;background:rgba(229,128,149,.18);box-shadow:0 0 0 1.5px #e58095;display:flex;align-items:center;justify-content:center;font-size:12px;color:#f7d5dc">3</span>
+<span class="m" style="width:30px;height:30px;border-radius:5px;background:#232532;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:12px;color:#b2b6ca">4</span>
+<span class="m" style="width:30px;height:30px;border-radius:5px;background:#232532;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:12px;color:#b2b6ca">5</span>
+<span class="m" style="width:30px;height:30px;border-radius:5px;background:#232532;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;justify-content:center;font-size:12px;color:#b2b6ca">6</span>
+</div>
+<span style="flex:1"></span>
+<span style="font-size:12px;color:#b5abfc">⤢</span>
+</div>
+<div style="height:4px;background:#1c1e2c;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:42%;background:#e58095"></div></div>
+</div>
+<p style="margin:0;font-size:13px;color:#9397ab">Not a separate window and not persistent — this is the <b>confirmation toast</b>. When the app is in the background and a global hotkey fires, this toast appears at the <b>bottom-right</b> of the primary display for <b>2 seconds</b> and fades. It states both halves of what just happened: who opened, and who was closed with the duration they got — the closing half is what lets the operator catch a mis-press without opening the app. It must render in under 100 ms, never steal focus, and never queue: a second press replaces the toast rather than stacking. Clicking it raises the full window.</p>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">08</span><h2 style="font-size:27px">S5 · Stop &amp; export</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start">
+<div style="width:640px;flex:0 0 auto;border-radius:10px;overflow:hidden;background:#161826;box-shadow:0 0 0 1px #3f424d, 0 24px 60px rgba(0,0,0,.45)" data-screen-label="S5 Export">
+<div style="height:40px;background:#1a1c29;border-bottom:1px solid rgba(233,233,237,.08);display:flex;align-items:center;padding:0 4px 0 14px;gap:12px"><div style="width:12px;height:12px;border-radius:3px;background:#9184d9"></div><span style="font-size:12.5px;color:#b2b6ca">Finishing — Weekly Product Review</span><span style="flex:1"></span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:13px">─</span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#9397ab;font-size:12px">☐</span><span style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;color:#595d6c;font-size:13px">✕</span></div>
+<div style="padding:24px">
+<h3 style="font-size:22px;margin-bottom:6px">Recording stopped · 47:32</h3>
+<p style="margin:0 0 20px;font-size:13.5px;color:#9397ab">Audio was written continuously during the meeting, so nothing is being re-encoded from scratch — this is a finalise pass.</p>
+<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:13px 15px">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><span style="font-size:13px;color:#4ec39b">✓</span><span class="m" style="font-size:13.5px;flex:1">weekly-product-review_2026-03-12.mp3</span><span class="m" style="font-size:12px;color:#75798c">43.6 MB</span></div>
+<div style="height:5px;border-radius:3px;background:#1c1e2c;overflow:hidden"><div style="height:100%;width:100%;background:#4ec39b"></div></div>
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:13px 15px">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><span style="font-size:13px;color:#9184d9">◐</span><span class="m" style="font-size:13.5px;flex:1">weekly-product-review_2026-03-12.md</span><span style="font-size:12px;color:#75798c">writing 38 marks…</span></div>
+<div style="height:5px;border-radius:3px;background:#1c1e2c;overflow:hidden"><div style="height:100%;width:72%;background:#9184d9"></div></div>
+</div>
+</div>
+<div style="background:#1c1e2c;border-radius:8px;box-shadow:0 0 0 1px #2c2f3d;padding:15px;margin-bottom:20px">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab;margin-bottom:12px">Session summary</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center;gap:10px"><span style="width:3px;height:14px;background:#9184d9;border-radius:2px"></span><span style="font-size:13px;width:110px">Kim Do-hyun</span><div style="flex:1;height:8px;border-radius:4px;background:#232532;overflow:hidden"><div style="height:100%;width:31%;background:#9184d9"></div></div><span class="m" style="font-size:12px;color:#b2b6ca;width:74px;text-align:right">14:42 · 31%</span></div>
+<div style="display:flex;align-items:center;gap:10px"><span style="width:3px;height:14px;background:#e58095;border-radius:2px"></span><span style="font-size:13px;width:110px">Lee Jun-ho</span><div style="flex:1;height:8px;border-radius:4px;background:#232532;overflow:hidden"><div style="height:100%;width:24%;background:#e58095"></div></div><span class="m" style="font-size:12px;color:#b2b6ca;width:74px;text-align:right">11:23 · 24%</span></div>
+<div style="display:flex;align-items:center;gap:10px"><span style="width:3px;height:14px;background:#d182c9;border-radius:2px"></span><span style="font-size:13px;width:110px">Park Seo-yeon</span><div style="flex:1;height:8px;border-radius:4px;background:#232532;overflow:hidden"><div style="height:100%;width:18%;background:#d182c9"></div></div><span class="m" style="font-size:12px;color:#b2b6ca;width:74px;text-align:right">08:33 · 18%</span></div>
+<div style="display:flex;align-items:center;gap:10px"><span style="width:3px;height:14px;background:#e58e6c;border-radius:2px"></span><span style="font-size:13px;width:110px">Choi Min-ah</span><div style="flex:1;height:8px;border-radius:4px;background:#232532;overflow:hidden"><div style="height:100%;width:13%;background:#e58e6c"></div></div><span class="m" style="font-size:12px;color:#b2b6ca;width:74px;text-align:right">06:11 · 13%</span></div>
+<div style="display:flex;align-items:center;gap:10px"><span style="width:3px;height:14px;background:#a2b04f;border-radius:2px"></span><span style="font-size:13px;width:110px">Han Ji-min</span><div style="flex:1;height:8px;border-radius:4px;background:#232532;overflow:hidden"><div style="height:100%;width:9%;background:#a2b04f"></div></div><span class="m" style="font-size:12px;color:#b2b6ca;width:74px;text-align:right">04:16 · 9%</span></div>
+<div style="display:flex;align-items:center;gap:10px"><span style="width:3px;height:14px;background:#595d6c;border-radius:2px"></span><span style="font-size:13px;width:110px;color:#9397ab">Unmarked</span><div style="flex:1;height:8px;border-radius:4px;background:#232532;overflow:hidden"><div style="height:100%;width:5%;background:#595d6c"></div></div><span class="m" style="font-size:12px;color:#75798c;width:74px;text-align:right">02:27 · 5%</span></div>
+</div>
+<p style="margin:12px 0 0;font-size:12px;color:#75798c">Unmarked time is reported honestly rather than hidden — it tells the operator how much of the transcript will come back without a speaker attached.</p>
+</div>
+<div style="display:flex;gap:10px">
+<div style="height:40px;padding:0 15px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;font-size:13.5px;color:#b2b6ca">Open folder</div>
+<div style="height:40px;padding:0 15px;border-radius:6px;box-shadow:0 0 0 1px #3f424d;display:flex;align-items:center;font-size:13.5px;color:#b2b6ca">Copy Markdown</div>
+<span style="flex:1"></span>
+<div style="height:40px;padding:0 20px;border-radius:6px;box-shadow:0 0 0 1.5px #9184d9;background:rgba(145,132,217,.12);display:flex;align-items:center;font-size:14px;color:#d2cefd">Done</div>
+</div>
+</div>
+</div>
+<div style="flex:1 1 340px;min-width:320px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:18px">Stop is the only exit, and it is guarded</h3>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5">Pressing Stop shows one inline confirmation strip at the top of S3 — <i>“Stop recording? 47:32 captured · Enter to confirm, Esc to keep going”</i> — not a modal. The window close button is disabled while recording; closing the window minimises to the mini bar instead.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5">Any mark still open at Stop is closed at the stop timestamp and flagged in the Markdown with <span class="m" style="font-size:12px">auto-closed</span>. Pause closes the open mark the same way and drops the paused span out of the file entirely — the timeline the operator sees after resuming is continuous, because the file is.</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:14px;font-size:13.5px;color:#cfd3e5">Audio is encoded to MP3 <b>during</b> the meeting in append mode, and the mark journal is flushed on every change. If the machine dies, S1 offers a one-click recovery that rebuilds the Markdown from the journal.</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">09</span><h2 style="font-size:27px">Keyboard map</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:18px">
+<div style="flex:1 1 420px;min-width:400px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px">
+<div style="display:flex;flex-direction:column;gap:0">
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">1 … 9, 0</span><span style="font-size:13.5px;color:#cfd3e5">Toggle mark for speaker 1–10. 0 is speaker 10.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Shift+1, Shift+2</span><span style="font-size:13.5px;color:#cfd3e5">Speakers 11 and 12. Shift is only a prefix for these two — Shift+3…0 are unbound, not aliases.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Space</span><span style="font-size:13.5px;color:#cfd3e5">Close the open mark without opening another (silence / crosstalk).</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Ctrl+Z / Ctrl+Y</span><span style="font-size:13.5px;color:#cfd3e5">Undo / redo the last mark operation. Unlimited depth within a session.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Ctrl+P</span><span style="font-size:13.5px;color:#cfd3e5">Pause / resume. The audio is cut and rejoined, so paused time does not exist in the file.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Ctrl+E</span><span style="font-size:13.5px;color:#cfd3e5">Expand / collapse the marks dock.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">↑ ↓</span><span style="font-size:13.5px;color:#cfd3e5">Move the dock selection. <span class="m">Enter</span> opens a row for editing.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">← → / Shift+←→</span><span style="font-size:13.5px;color:#cfd3e5">Nudge the selected boundary 0.5 s / 0.1 s.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Ctrl+N</span><span style="font-size:13.5px;color:#cfd3e5">Add a speaker mid-session; the roster grows and hotkeys renumber only by appending.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid rgba(233,233,237,.07)"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Esc</span><span style="font-size:13.5px;color:#cfd3e5">Stop (asks once). Never quits the app.</span></div>
+<div style="display:flex;align-items:center;gap:14px;padding:9px 0"><span class="m" style="width:120px;font-size:13px;color:#d2cefd">Alt+1…0</span><span style="font-size:13.5px;color:#cfd3e5">Global hotkeys — work while Teams or any other app has focus. <span class="m">Alt+Shift+1/2</span> for slots 11–12. Each press raises a 2-second toast and nothing else; focus is never taken.</span></div>
+</div>
+</div>
+<div style="flex:1 1 300px;min-width:290px;background:#1c1e2c;border-radius:8px;box-shadow:0 0 0 1px #2c2f3d;padding:20px">
+<div style="font-size:13px;color:#9397ab;margin-bottom:10px">Marking semantics — tap toggle with auto-continue</div>
+<div style="display:flex;flex-direction:column;gap:9px;font-size:13px;color:#cfd3e5">
+<div>· Press <b>A</b> → A's mark opens at <span class="m" style="font-size:12px">now − 0.8 s</span>.</div>
+<div>· Press <b>B</b> while A is open → A closes at now, B opens at now. One boundary, no gap. This is the common case and must feel instant.</div>
+<div>· Press <b>A</b> again while A is open → A closes. Nothing opens.</div>
+<div>· Press <b>A</b> within 1.2 s of A closing → the app <b>reopens the previous mark</b> rather than creating a short second one. This silently repairs the most common double-tap error.</div>
+<div>· Overlap off (default): opening B always closes A. Overlap on: both stay open and the block lane splits into two rows.</div>
+<div>· A key press is always accepted, even mid-encode. Input handling must not sit on the audio thread.</div>
+</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">10</span><h2 style="font-size:27px">Output contract</h2></div>
+<p style="margin:0;font-size:14px;color:#9397ab;max-width:900px">This is the part an LLM consumes, so it is a contract, not a suggestion. Write exactly this shape. Timestamps are <span class="m" style="font-size:13px">HH:MM:SS.mmm</span> from the start of the audio file, so an LLM can seek without any offset arithmetic.</p>
+<div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start">
+<div style="flex:1 1 640px;min-width:600px;background:#1c1e2c;border-radius:8px;box-shadow:0 0 0 1px #2c2f3d;overflow:hidden">
+<div style="padding:11px 16px;background:#232532;border-bottom:1px solid rgba(233,233,237,.08);display:flex;align-items:center;gap:10px"><span class="m" style="font-size:12.5px;color:#b2b6ca">weekly-product-review_2026-03-12.md</span><span style="flex:1"></span><span style="font-size:11.5px;color:#75798c">UTF-8, LF, no BOM</span></div>
+<pre class="m" style="margin:0;padding:18px;font-size:12.5px;line-height:1.7;color:#cfd3e5;overflow:auto;white-space:pre">---
+title: Weekly Product Review
+date: 2026-03-12T14:03:11+09:00
+duration: 00:47:32.480
+audio_file: weekly-product-review_2026-03-12.mp3
+audio_format: mp3 / 128 kbps / 44100 Hz / mono
+timebase: offset from start of audio_file
+paused_total: 00:05:12.000
+wall_clock_end: 2026-03-12T15:00:55+09:00
+marking: manual, single operator
+speakers:
+  - id: S1
+    name: Kim Do-hyun
+    role: Product
+  - id: S2
+    name: Park Seo-yeon
+    role: Design
+  - id: S3
+    name: Lee Jun-ho
+    role: Engineering
+  - id: S4
+    name: Choi Min-ah
+    role: Data
+  - id: S6
+    name: Han Ji-min
+    role: Marketing
+unmarked_duration: 00:02:27.900
+tool: MeetingRecorder 0.1
+---
+
+# Weekly Product Review
+
+Speaker segments in chronological order. Each row is one continuous
+turn marked by the operator during the meeting.
+
+| # | speaker | name | start | end | duration |
+|---|---------|------|-------|-----|----------|
+| 1 | S1 | Kim Do-hyun | 00:00:04.100 | 00:01:52.640 | 00:01:48.540 |
+| 2 | S3 | Lee Jun-ho | 00:01:52.640 | 00:02:31.020 | 00:00:38.380 |
+| 3 | S2 | Park Seo-yeon | 00:02:33.500 | 00:03:10.880 | 00:00:37.380 |
+| 4 | S1 | Kim Do-hyun | 00:03:10.880 | 00:03:42.310 | 00:00:31.430 |
+| 5 | S4 | Choi Min-ah | 00:03:44.900 | 00:05:02.150 | 00:01:17.250 |
+| 6 | S6 | Han Ji-min | 00:05:02.150 | 00:05:29.700 | 00:00:27.550 |
+
+## Gaps
+
+Ranges with no speaker marked. Transcribe these, but attribute with care.
+
+| start | end | duration |
+|-------|-----|----------|
+| 00:00:00.000 | 00:00:04.100 | 00:00:04.100 |
+| 00:02:31.020 | 00:02:33.500 | 00:00:02.480 |
+| 00:03:42.310 | 00:03:44.900 | 00:00:02.590 |
+
+## Notes
+
+- All times are offsets into audio_file. Recording was paused twice; the
+  paused time is absent from both the audio and this table.
+- Mark starts are shifted 0.8 s earlier than the operator's key press.
+- Mark 27 (S3, 00:31:14.220) was auto-closed when recording stopped.
+- Overlapping speech was not recorded separately in this session.
+- Speaker S1 is the operator, who marked the meeting while taking part in it.
+</pre>
+</div>
+<div style="flex:1 1 300px;min-width:290px;display:flex;flex-direction:column;gap:12px">
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:16px">
+<div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#9397ab;margin-bottom:10px">Session folder</div>
+<pre class="m" style="margin:0;font-size:12px;line-height:1.75;color:#cfd3e5;white-space:pre">2026-03-12_weekly-product-review\
+  weekly-product-review_2026-03-12.mp3
+  weekly-product-review_2026-03-12.md
+  session.json      ← full state, app-owned
+  marks.jsonl       ← append-only journal
+</pre>
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:16px;font-size:13.5px;color:#cfd3e5">
+<b style="color:#e9e9ed">Why both a table and a gaps section.</b> An LLM given only speaker rows will silently invent attribution for the space between them. Listing gaps explicitly is what keeps the transcript honest.
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:16px;font-size:13.5px;color:#cfd3e5">
+<b style="color:#e9e9ed">Speaker ids are slot-stable.</b> <span class="m" style="font-size:12px">S5</span> is absent from this roster because slot 5 was marked absent. Never renumber slots to close a gap — the ids must match the colours the operator saw.
+</div>
+<div style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:16px;font-size:13.5px;color:#cfd3e5">
+<b style="color:#e9e9ed">Ask before changing this.</b> If you need a different table shape, JSON alongside, or WebVTT, say so — the format was left to me and this is my proposal, not a settled requirement.
+</div>
+</div>
+</div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:14px"><span style="font-size:11px;color:#5d5294;font-weight:600">11</span><h2 style="font-size:27px">Build notes</h2></div>
+<div style="display:flex;flex-wrap:wrap;gap:18px">
+<div style="flex:1 1 320px;min-width:300px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px">
+<h4 style="font-size:15px;margin-bottom:10px">Stack</h4>
+<div style="font-size:13.5px;color:#b2b6ca;display:flex;flex-direction:column;gap:8px">
+<div>WinUI 3 / Windows App SDK, C#, packaged MSIX. Mica off — this app owns a flat dark ground, and Mica would let the desktop wallpaper through a screen the operator stares at for an hour.</div>
+<div>Fluent's motion and focus behaviour is kept; Fluent's colours are replaced wholesale by the tokens in section 02.</div>
+<div>Capture with WASAPI (<span class="m" style="font-size:12px">AudioGraph</span> or NAudio). Encode with a bundled LAME; no ffmpeg process, no download at runtime.</div>
+<div>If WinUI 3 is not viable for you, ask before switching to WPF — the layout survives either, the dependency story does not.</div>
+</div>
+</div>
+<div style="flex:1 1 320px;min-width:300px;background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:20px">
+<h4 style="font-size:15px;margin-bottom:10px">Non-negotiable behaviour</h4>
+<div style="font-size:13.5px;color:#b2b6ca;display:flex;flex-direction:column;gap:8px">
+<div>Audio capture and encoding run on a dedicated thread; nothing in the UI can block them. Dropped-frame count is surfaced in the header, not swallowed.</div>
+<div>Mark state is appended to <span class="m" style="font-size:12px">marks.jsonl</span> and fsync'd on every operation.</div>
+<div>Sleep and display-off are inhibited for the session duration. The screen dims but does not lock.</div>
+<div>Device unplugged mid-session → keep recording from the fallback device, write a note into the Markdown, show a persistent banner. Never stop.</div>
+<div>Timestamps come from the audio sample count, not the wall clock, so drift cannot desynchronise the marks from the file.</div>
+<div>Pause cuts the audio and rejoins it, so the file is shorter than the meeting. Every timestamp is measured against the <b>file</b>, not the clock — an LLM seeking to <span class="m" style="font-size:12px">00:31:14</span> in the MP3 lands exactly on the marked speech. Wall-clock times are kept in <span class="m" style="font-size:12px">session.json</span> only.</div>
+<div>Marking is a single-operator job and the operator is an ordinary speaker with an ordinary slot and key — no privileged row, no separate colour.</div>
+</div>
+</div>
+<div style="flex:1 1 320px;min-width:300px;background:#1c1e2c;border-radius:8px;box-shadow:0 0 0 1px #2c2f3d;padding:20px">
+<h4 style="font-size:15px;margin-bottom:10px;color:#9397ab">Explicitly out of scope</h4>
+<div style="font-size:13.5px;color:#9397ab;display:flex;flex-direction:column;gap:8px">
+<div>Automatic speaker diarisation or on-device speech recognition. A human is the classifier here; that is the whole premise.</div>
+<div>Joining the Teams/Meet call, bots, calendar integration, cloud storage, sharing links, multi-user editing.</div>
+<div>Editing the audio itself. The MP3 is never cut, only marked.</div>
+<div>Themes. There is one dark theme.</div>
+</div>
+</div>
+</div>
+</section>
+
+<section style="background:#232532;border-radius:8px;box-shadow:0 0 0 1px #3f424d;padding:24px;display:flex;flex-direction:column;gap:12px;max-width:1000px">
+<h3 style="font-size:19px">Open with you, not with the agent</h3>
+<div style="display:flex;flex-direction:column;gap:9px;font-size:14px;color:#cfd3e5">
+<div>1 · <b>Windows or Android?</b> This is built for Windows per your answer, but the original brief was a phone. If both are real, the phone version needs its own layout pass — the desktop grid does not fold down.</div>
+<div>2 · <b>System-audio capture.</b> Assumed out. If remote participants are quiet through the room speakers, adding a second capture lane changes the setup screen and the audio pipeline.</div>
+<div>3 · <b>Markdown shape.</b> You left the format to me. Section 10 is a proposal — if the consuming prompt on the Gemini/Claude side expects something else, that wins.</div>
+<div>4 · <b>User-assigned hotkeys.</b> Defaults are <span class="m" style="font-size:12px">Alt+1…0</span> and <span class="m" style="font-size:12px">Alt+Shift+1/2</span>, and the user can reassign any of them. The app must test each registration at start and mark the ones Windows refused, since a silently unregistered hotkey looks identical to a missed press. Where the remapping UI lives is the open question.</div>
+<div>5 · <b>Who else uses this?</b> Presets, roster and folder layout assume one operator on one machine. Shared use would change S1 substantially.</div>
+</div>
+</section>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;speakerCount&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:6,&quot;min&quot;:2,&quot;max&quot;:12,&quot;step&quot;:1,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Recording screen&quot;}}">
+const PAL = ['#9184d9','#d182c9','#e58095','#e58e6c','#c9a04f','#a2b04f','#74bd6f','#4ec39b','#4ec1bd','#5fb8de','#7aabf0','#8f8fa8'];
+const ROSTER = [
+  ['Kim Do-hyun','Product'],['Park Seo-yeon','Design'],['Lee Jun-ho','Engineering'],
+  ['Choi Min-ah','Data'],['Jung Woo-sung','Sales'],['Han Ji-min','Marketing'],
+  ['Oh Se-jin','Support'],['Yoon Tae-hee','Legal'],['Bae Ji-won','Finance'],
+  ['Nam Ki-hoon','Research'],['Seo Yu-jin','Operations'],['Ha Jun-seo','QA']
+];
+const KEYS = ['1','2','3','4','5','6','7','8','9','0','⇧1','⇧2'];
+
+function pad(n, w) { let s = String(Math.floor(n)); while (s.length < w) s = '0' + s; return s; }
+function hms(t) { return pad(t / 3600, 2) + ':' + pad((t % 3600) / 60, 2) + ':' + pad(t % 60, 2); }
+function hmsT(t) { return hms(t) + '.' + pad((t % 1) * 10, 1); }
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const seed = [
+      { s: 520.2, e: 550.0, i: 2 }, { s: 550.0, e: 598.6, i: 0 },
+      { s: 597.9, e: 598.6, i: 1 }, { s: 598.6, e: 629.1, i: 0 },
+      { s: 631.0, e: 662.4, i: 3 }, { s: 664.2, e: 712.8, i: 2 },
+      { s: 715.0, e: 747.0, i: 2 }
+    ];
+    this.state = { t: 761, marks: seed, active: 2, activeStart: 747 };
+  }
+  componentDidMount() {
+    this._iv = setInterval(() => this.setState(s => ({ t: s.t + 0.25 })), 250);
+  }
+  componentWillUnmount() { clearInterval(this._iv); }
+
+  count() { return Math.max(2, Math.min(12, this.props.speakerCount ?? 6)); }
+
+  tap(i) {
+    this.setState(s => {
+      const t = s.t;
+      if (s.active === i) {
+        return { marks: s.marks.concat([{ s: s.activeStart, e: t, i }]), active: null, activeStart: null };
+      }
+      const marks = s.active === null ? s.marks : s.marks.concat([{ s: s.activeStart, e: t, i: s.active }]);
+      return { marks, active: i, activeStart: Math.max(0, t - 0.8) };
+    });
+  }
+
+  renderVals() {
+    const st = this.state, n = this.count(), t = st.t;
+    const cols = n <= 4 ? 2 : n <= 6 ? 3 : n <= 9 ? 3 : 4;
+    const tileH = (n <= 4 ? 148 : n <= 6 ? 116 : n <= 9 ? 96 : 76) + 'px';
+    const nameSize = n <= 4 ? 24 : n <= 6 ? 19 : n <= 9 ? 17 : 16;
+
+    const closed = st.marks;
+    const all = st.active === null ? closed : closed.concat([{ s: st.activeStart, e: t, i: st.active }]);
+    const talk = {};
+    all.forEach(m => { talk[m.i] = (talk[m.i] || 0) + (m.e - m.s); });
+
+    const speakers = [];
+    for (let i = 0; i < n; i++) {
+      const on = st.active === i;
+      const c = PAL[i];
+      speakers.push({
+        key: KEYS[i], num: pad(i + 1, 2), name: ROSTER[i][0], role: ROSTER[i][1], color: c,
+        h: tileH, nameSize,
+        bg: on ? 'color-mix(in srgb, ' + c + ' 16%, transparent)' : '#232532',
+        ring: on ? '0 0 0 1.5px ' + c + ', 0 0 22px color-mix(in srgb, ' + c + ' 28%, transparent)' : '0 0 0 1px #3f424d',
+        nameColor: on ? '#f3f5fe' : '#e9e9ed',
+        numColor: on ? '#cfd3e5' : '#75798c',
+        metaColor: on ? '#e4e7f5' : '#75798c',
+        meta: on ? '◉ ' + pad((t - st.activeStart) / 60, 2) + ':' + pad((t - st.activeStart) % 60, 2)
+                 : (talk[i] ? pad(talk[i] / 60, 2) + ':' + pad(talk[i] % 60, 2) : '—'),
+        onTap: () => this.tap(i)
+      });
+    }
+
+    const bars = [];
+    const lvl = st.active === null ? 0.35 : 1;
+    for (let k = 0; k < 120; k++) {
+      const p = Math.floor(t * 4) + k;
+      const a = Math.abs(Math.sin(p * 1.7) * 0.5 + Math.sin(p * 0.37) * 0.3 + Math.sin(p * 5.1) * 0.2);
+      const h = 10 + a * 100 * lvl;
+      bars.push({ h: h.toFixed(0) + 'px', c: k > 112 ? '#9397ab' : '#595d6c' });
+    }
+
+    const mini = all.slice(-40).map(m => ({
+      left: ((m.s / t) * 100).toFixed(2) + '%',
+      width: Math.max(0.4, ((m.e - m.s) / t) * 100).toFixed(2) + '%',
+      color: PAL[m.i]
+    }));
+
+    const recent = closed.slice().reverse().slice(0, 3).map(m => ({
+      key: pad(m.i + 1, 2), name: ROSTER[m.i][0], color: PAL[m.i],
+      range: hmsT(m.s) + ' → ' + hmsT(m.e),
+      dur: (m.e - m.s).toFixed(1) + ' s',
+      onNudgeStart: () => this.setState(s => ({ marks: s.marks.map(x => x === m ? { s: x.s - 0.5, e: x.e, i: x.i } : x) })),
+      onNudgeEnd: () => this.setState(s => ({ marks: s.marks.map(x => x === m ? { s: x.s, e: x.e + 0.5, i: x.i } : x) })),
+      onDelete: () => this.setState(s => ({ marks: s.marks.filter(x => x !== m) }))
+    }));
+
+    const win = Math.min(45, t);
+    return {
+      clock: hms(t),
+      recDot: '#e58095',
+      markCount: all.length,
+      activeName: st.active === null ? 'nobody' : ROSTER[st.active][0],
+      activeColor: st.active === null ? '#75798c' : PAL[st.active],
+      diskMB: (t * 0.0153).toFixed(1),
+      countLabel: n + ' of 12',
+      gridCols: 'repeat(' + cols + ', 1fr)',
+      tileH, speakers, bars, mini, recent,
+      viewLeft: (((t - win) / t) * 100).toFixed(2) + '%',
+      viewWidth: ((win / t) * 100).toFixed(2) + '%',
+      windowStart: hms(Math.max(0, t - win)),
+      onUndo: () => this.setState(s => ({ marks: s.marks.slice(0, -1) }))
+    };
+  }
+}
+
+</script>
+</body>
+</html>
