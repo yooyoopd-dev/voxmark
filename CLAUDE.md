@@ -62,53 +62,81 @@ interaction rule.
   encoding (bundles `libmp3lame.dll`, x86+x64, as content — no ffmpeg
   process, no runtime download, matching the design guide's build note).
 - Layout: `src/MeetingRecorder/`
-  - `Models/` — `Speaker`, `Mark`, `RecordingSession`. Plain data, no logic.
-  - `Services/` — `AudioCaptureService` (capture + MP3 encode + file-time
-    tracking), `InputLevelMeter` (setup-screen mic check, no file written),
-    `MarkingEngine` (the tap-toggle marking state machine, pure logic, no
-    UI dependency), `MarkdownExporter` (writes the output contract).
-  - `Views/` — `SetupWindow`, `RecordingWindow`, `ExportSummaryWindow`. One
-    WPF `Window` per screen; UI built mostly in code-behind rather than
-    heavy XAML data-binding, to keep behaviour easy to trace in one place.
+  - `Theme/` — `Tokens.xaml` (the section 02 colour tokens), `Controls.xaml`
+    (button/input/scrollbar skins), `Palette.cs` (the same tokens for the
+    code-built parts: tiles, waveform, block lane). Keep the XAML and the
+    C# palette in step.
+  - `Models/` — `Speaker`, `MarkKey`, `Mark`, `OpenMark`, `Gap`,
+    `SessionOptions`, `Preset`, `RecordingSession`. Plain data, no logic;
+    `RecordingSession` is what `session.json` serialises.
+  - `Services/` — `AudioCaptureService` (capture, MP3 encode, file-time
+    tracking, device fallback), `InputLevelMeter` (setup mic check, no file
+    written), `MarkingEngine` (the tap-toggle state machine *and* the live
+    repair operations — pure logic, no UI dependency), `MarkJournal`
+    (`marks.jsonl`, fsync per operation), `SessionStore` / `PresetStore`
+    (the on-disk session folder and presets), `MarkdownExporter` (the output
+    contract), `GlobalHotkeyService`, `PowerKeepAwake`, `KeyMap`, `DiskInfo`.
+  - `Controls/` — `TitleBar`, `WaveformView`, `BlockLaneView`, `SpeakerTile`,
+    `RosterRow`, `MarksDock`, `Dropdown`. Custom-drawn where the guide asks
+    for something WPF has no primitive for.
+  - `Views/` — `ShellWindow` (shared 40px chrome), `LibraryWindow` (S1),
+    `SetupWindow` (S2), `RecordingWindow` (S3+S4), `ExportWindow` (S5),
+    `ToastWindow` (the mini bar), `Ui` (small layout builders). UI is built
+    in code rather than XAML data-binding, to keep behaviour traceable in
+    one place.
 
 ## Scope of this build — implemented vs. deferred
 
-Implemented: **Setup → Record & Mark → Stop & Export**, the spec's core
-vertical slice, confirmed with the user before building instead of the
-full 5-screen spec in one pass. Covers: roster + input device setup with a
-live level check; tap-toggle marking with the 0.8s backdate offset and the
-1.2s double-tap reopen repair (design guide section 09); Ctrl+Z undo,
-Ctrl+P pause (cuts and rejoins the audio), Esc stop with an inline (not
-modal) confirmation; the exact Markdown output contract (section 10);
-elapsed time driven by audio samples written, not the wall clock (section
-11).
+All five screens in the guide are built: **S1 Library → S2 Setup → S3 Record
+& mark → S4 Marks dock → S5 Stop & export.**
 
-**Deliberately deferred — do not build these speculatively, confirm scope
-with the user first:**
+Implemented, with the guide section each answers to:
 
-- **S1 Library** (past-session browsing, crash recovery entry point) — no
-  session list exists yet; each run starts a fresh meeting.
-- **Global hotkeys + mini-bar toast** (Alt+1…0 working while another app
-  has focus) — needs `RegisterHotKey` + a tray icon; marking only works
-  while the app window has focus right now.
-- **Preset management** (save/load a named roster) — roster is re-entered
-  every session.
-- **Live mark editing** (nudge/split/merge/reassign in an expanded marks
-  dock, audition playback) — the marks dock here is read-only, last 8
-  marks. Undo is a single linear stack, not the guide's "unlimited depth,"
-  and there's no redo (Ctrl+Y) yet.
-- **Crash recovery journal** (`marks.jsonl`, `session.json`, fsync per
-  operation) — nothing is persisted until Stop; a crash mid-meeting loses
-  the session. This is the biggest gap vs. "non-negotiable behaviour" in
-  section 11 and should be prioritised in the first follow-up.
-- **Device-unplugged fallback**, **sleep/display-off inhibition**, **disk
-  free-space display**, **"allow overlapping marks" setting** — not
-  implemented; marking always closes the previous speaker (overlap off).
-- **Visual fidelity** — the dark theme's colour tokens (section 02) are
-  used as-is, but layout is a functional approximation built in code, not
-  a pixel-perfect recreation of the mockup, and it substitutes system
-  fonts (Consolas/Segoe) for the guide's Inter/JetBrains Mono rather than
-  bundling font files.
+- **02 tokens** — the colour ramp, the 12-slot speaker palette, monospaced
+  tabular timecodes, 4px spacing scale, 72×160 minimum tile.
+- **04 recording** — live 45 s waveform with chapter-marker flags at every
+  speaker change, whole-session minimap with the live viewport, the
+  Marks / Speaking now / Input / Written to disk header, dropped-buffer
+  count surfaced rather than swallowed.
+- **05 grid** — column count and tile height derived from speaker count
+  alone (2→4 / 5–6 / 7–9 / 10–12), roster order fixed for the session.
+- **06 marks dock** — collapsed live-repair rows and the expanded dock:
+  filters, inline reassign, 0.5 s / 0.1 s nudges, split at the review
+  playhead, merge, insert-into-gap, immediate delete with a 6 s undo toast,
+  neighbour trimming with a notice, and self-flagged suspects (marks under
+  2 s, sub-0.3 s gaps between different speakers).
+- **07 setup & library** — two-pane setup with meeting metadata, presets,
+  the unskippable input check with a dB scale and free-disk readout, roster
+  rows with per-speaker key cells (duplicates rejected at keystroke time),
+  absent speakers that keep their slot, overlap and mark-offset options; the
+  library lists past sessions and offers one-click recovery.
+- **08 stop & export** — inline stop confirmation (never a modal), auto-close
+  of the open mark, the finalise-pass export screen with per-speaker talk
+  time and an honest "Unmarked" row.
+- **09 keyboard** — 1–9/0 and Shift+1/2, Space, Ctrl+Z/Ctrl+Y (unlimited,
+  snapshot-based), Ctrl+P, Ctrl+E, Ctrl+N, ↑↓/Enter/Tab/←→, Esc; plus
+  **Alt+1…0 / Alt+Shift+1,2 global hotkeys** with the 2-second, focus-free
+  mini-bar toast, and refused registrations named in the header.
+- **10 output contract** — unchanged in shape; see below.
+- **11 non-negotiables** — `marks.jsonl` fsync'd per operation, sleep and
+  display-off inhibited, device-unplugged fallback that keeps recording and
+  writes a note into the Markdown, timestamps from the audio sample count.
+
+**Deliberately deferred — confirm scope with the user before building:**
+
+- **Audition playback** in the marks dock. The guide wants it enabled only
+  with headphones, and there is no reliable way to detect them; the button
+  ships in the guide's own disabled state with its "connect headphones"
+  label rather than risking playback feeding back into the recording.
+- **Bundled Inter / JetBrains Mono.** The guide names those faces; shipping
+  font files fights the "one small self-contained exe" requirement, so the
+  app substitutes Segoe UI Variable and Cascadia Mono with fallbacks.
+- **System-audio capture as a second lane.** The guide puts it out of scope;
+  the pre-existing loopback *device* option is kept, and the true format is
+  written into `audio_format` rather than assumed.
+- **WinUI 3 / MSIX** — see the tech stack note above. Not a gap to close.
+- **Shared or multi-machine libraries**, calendar/Teams integration,
+  diarisation, audio editing — all out of scope per section 11.
 
 ## Output contract (read section 10 before touching `MarkdownExporter`)
 

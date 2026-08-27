@@ -44,19 +44,46 @@ tagged builds are attached to a GitHub Release.
 
 ## Using it
 
-1. **Setup** — title the meeting, pick the input device (check the level
-   bar), add speakers (each gets a key: 1-9, 0, then Shift+1/Shift+2).
-2. **Start recording** — press a speaker's key (or click their tile) to
-   mark them as speaking; press it again, or another speaker's key, to
-   switch. Space closes without opening anyone. Ctrl+Z undoes, Ctrl+P
-   pauses (cuts the audio and rejoins it on resume), Esc stops (asks once).
-3. **Stop** — writes `<slug>_<date>.mp3` and `<slug>_<date>.md` into
-   `Documents\MeetingRecorder\Sessions\<date>_<slug>\`.
+1. **Library** — every past meeting is a folder on this machine. Start a new
+   one, or finish exporting a session the app never got to close.
+2. **Setup** — title the meeting, pick the input device and watch the level
+   meter, build the roster. Each speaker gets a marking key (1-9, 0, then
+   Shift+1/Shift+2) that you can reassign by clicking its key cell; absent
+   people keep their slot and colour. Save the roster as a preset to reuse it.
+3. **Record & mark** — press a speaker's key (or click their tile) when they
+   start; press another speaker's key to hand over in one boundary. Every
+   mark start is backdated 0.8 s, because a human always presses late.
+
+   | | |
+   |---|---|
+   | `1`…`9`, `0` | mark speakers 1-10 |
+   | `Shift+1` / `Shift+2` | speakers 11-12 |
+   | `Alt+1`…`0` | the same, from any other app — a toast confirms |
+   | `Space` | close the open mark without opening another |
+   | `Ctrl+Z` / `Ctrl+Y` | undo / redo, unlimited |
+   | `Ctrl+P` | pause — the audio is cut and rejoined |
+   | `Ctrl+E` | expand the marks dock to repair marks live |
+   | `Ctrl+N` | add a speaker mid-meeting |
+   | `↑` `↓` `Enter` | move and open a mark in the dock |
+   | `←` `→` (`Shift` for 0.1 s) | nudge the selected boundary 0.5 s |
+   | `Esc` | stop — asks once, inline |
+
+   The dock flags its own suspects: marks under 2 seconds, and sub-0.3-second
+   gaps between two different speakers. Recording never stops while you edit.
+4. **Stop** — writes `<slug>_<date>.mp3` and `<slug>_<date>.md` into
+   `Documents\VoxMark\Sessions\<date>_<slug>\`, alongside a `session.json`
+   and the `marks.jsonl` journal that makes a crash recoverable.
 
 ## What's implemented vs. deferred
 
-This build is the core vertical slice — setup → record & mark → export —
-not the full design spec. See "Scope of this build" in
-[`CLAUDE.md`](CLAUDE.md) for exactly what's deferred (session library,
-global hotkeys, preset management, live mark editing, crash recovery) and
-why.
+All five screens in the design guide are built — library, setup, record,
+marks dock, export — along with the global hotkeys, the crash-recovery
+journal, presets and live mark repair.
+
+Two things are deliberately left out, and both are judgement calls rather
+than gaps: **audition playback** in the marks dock (the guide only wants it
+with headphones attached, which cannot be detected reliably, so the button
+ships in its documented disabled state) and **bundled Inter / JetBrains
+Mono** (shipping font files fights the one-small-exe requirement, so the app
+substitutes Segoe UI Variable and Cascadia Mono). See "Scope of this build"
+in [`CLAUDE.md`](CLAUDE.md) for the full list and the reasoning.
