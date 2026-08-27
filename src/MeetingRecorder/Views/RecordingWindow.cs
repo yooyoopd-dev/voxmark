@@ -396,7 +396,8 @@ public sealed class RecordingWindow : ShellWindow
             // press, so it is named rather than swallowed (section 11).
             ShowNotice("Windows refused these global hotkeys — another app already holds them: " +
                        string.Join(", ", _hotkeys.Failed.Select(k => k.GlobalLabel)) +
-                       ". They still work while this window has focus.");
+                       ". The plain " + string.Join(", ", _hotkeys.Failed.Select(k => k.Label)) +
+                       " keys still mark while this window has focus.");
         }
 
         _timer.Start();
@@ -461,6 +462,7 @@ public sealed class RecordingWindow : ShellWindow
         _minimap.ViewportEnd = elapsed;
         _minimap.SetMarks(_marking.Chronological());
         _minimapClock.Text = Ui.Clock(elapsed) + " / whole session";
+        _dock.UpdateLive(elapsed);
 
         UpdateTiles(elapsed);
 
@@ -652,7 +654,12 @@ public sealed class RecordingWindow : ShellWindow
                 return;
         }
 
-        if (KeyMap.ToMarkKey(e.Key, shift) is { } markKey)
+        // A global hotkey Windows refused never reaches the message loop as a
+        // plain digit — Alt+1 arrives as Key.System with the digit in
+        // SystemKey — so unwrap it here and let the press mark anyway.
+        var digitKey = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        if (KeyMap.ToMarkKey(digitKey, shift) is { } markKey)
         {
             var speaker = _session.Speakers.FirstOrDefault(s => s.Key == markKey);
             if (speaker is not null)

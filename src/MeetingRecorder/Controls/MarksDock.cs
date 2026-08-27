@@ -146,6 +146,17 @@ public sealed class MarksDock : Border
         LayoutChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Cheap per-frame update: the lane has to keep growing with the
+    /// recording, but rebuilding every row ten times a second would not.
+    /// </summary>
+    public void UpdateLive(double seconds)
+    {
+        if (!_expanded) return;
+        _lane.TotalSeconds = Math.Max(1, seconds);
+        _lane.InvalidateVisual();
+    }
+
     public void ShowNotice(string message, bool offerUndo)
     {
         _toastText.Text = message;
