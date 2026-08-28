@@ -277,3 +277,7 @@ ships in its documented disabled state) and **bundled Inter / JetBrains
 Mono** (shipping font files fights the one-small-exe requirement, so the app
 substitutes Segoe UI Variable and Cascadia Mono). See "Scope of this build"
 in [`CLAUDE.md`](CLAUDE.md) for the full list and the reasoning.
+
+## For Whisper Model
+
+https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin.
