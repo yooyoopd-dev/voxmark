@@ -771,6 +771,17 @@ public sealed class RecordingWindow : ShellWindow
     {
         _dock.Refresh();
         _markCount.Text = _marking.Marks.Count.ToString();
+
+        // A live-repair edit (reassign, nudge, merge, split, delete,
+        // undo/redo) can change which mark a transcript line was resolved
+        // against; already-drawn lines otherwise keep the colour they were
+        // given the moment they first appeared. Re-resolving all of them
+        // here is cheap — only the timecode labels repaint — and this fires
+        // on every marking change regardless of edition, so it's a no-op
+        // (null strip) whenever transcription isn't running.
+        _transcriptView?.RecolorAll(s => TranscriptMapper.MarkFor(s, _marking.Marks) is { } m
+            ? Palette.ForSlot(m.SpeakerSlot)
+            : (Color?)null);
     }
 
     private void OnDockLayoutChanged()

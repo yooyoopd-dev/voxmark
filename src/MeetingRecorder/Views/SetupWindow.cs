@@ -37,6 +37,9 @@ public sealed class SetupWindow : ShellWindow
     private readonly Border _levelTrack;
     private readonly TextBlock _levelStatus;
     private readonly TextBlock _diskText;
+    private readonly TextBlock _sessionsRootText;
+    private readonly TextBox _log;
+    private readonly Button _copyLogButton;
     private readonly StackPanel _rosterPanel = new();
     private readonly WrapPanel _presetChips = new();
     private readonly TextBlock _rosterHeading;
@@ -102,6 +105,28 @@ public sealed class SetupWindow : ShellWindow
         _diskText = Ui.Mono("—", 12.5, Palette.TextBodyBrush);
         _rosterHeading = Ui.Section("Roster · 0");
         _folderPreview = Ui.Mono("—", 12, Palette.TextBodyBrush);
+
+        _sessionsRootText = Ui.Mono("—", 12, Palette.TextBodyBrush);
+        _sessionsRootText.MaxWidth = 220;
+        _sessionsRootText.TextTrimming = TextTrimming.CharacterEllipsis;
+
+        _log = new TextBox
+        {
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            FontFamily = Ui.MonoFont,
+            FontSize = 11.5,
+            Foreground = Palette.TextMutedBrush,
+            Height = 90,
+            Text = "No issues yet",
+        };
+        _copyLogButton = Ui.MakeButton("Copy", null, "GhostButton", (_, _) =>
+        {
+            if (_log.Text.Length > 0) Clipboard.SetText(_log.Text);
+        });
 
         _overlapToggle = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
         if (TryFindResource("ToggleSwitch") is Style toggle) _overlapToggle.Style = toggle;
@@ -303,12 +328,43 @@ public sealed class SetupWindow : ShellWindow
             _diskText);
         diskRow.Margin = new Thickness(0, 10, 0, 0);
 
+        var browseSave = Ui.MakeButton("Browse…", null, "ChipButton", (_, _) => BrowseForSaveFolder());
+        browseSave.Margin = new Thickness(8, 0, 0, 0);
+        var resetSave = Ui.MakeButton("Reset", null, "LinkButton", (_, _) => ResetSaveFolder());
+        resetSave.Margin = new Thickness(6, 0, 0, 0);
+
+        var saveToRow = Ui.Columns(1,
+            Ui.Text("Save recordings to", 12.5, Palette.TextBodyBrush),
+            Ui.Filler(),
+            _sessionsRootText,
+            browseSave,
+            resetSave);
+        saveToRow.Margin = new Thickness(0, 10, 0, 0);
+
+        var saveToNote = Ui.Wrap(
+            "Sessions already saved under a previous location won't move or show up in the " +
+            "Library after switching — this redirects new meetings, it doesn't migrate old ones.",
+            11, Palette.TextMutedBrush);
+        saveToNote.Margin = new Thickness(0, 4, 0, 0);
+
         var inputCard = Ui.Card(Ui.Vertical(10,
             deviceRow,
             _levelTrack,
             scale,
             Ui.Rule(),
+            saveToRow,
+            saveToNote,
             diskRow), new Thickness(13));
+
+        var logHeader = Ui.Columns(1,
+            Ui.Text("Diagnostics from a failed save-folder creation appear here, copyable.",
+                11.5, Palette.TextMutedBrush),
+            Ui.Filler(),
+            _copyLogButton);
+
+        var logCard = Ui.Card(Ui.Vertical(8,
+            logHeader,
+            Ui.Well(_log, new Thickness(8), 6)), new Thickness(13));
 
         return Ui.Vertical(0,
             WithMargin(Ui.Section("Meeting"), 0, 0, 0, 10),
@@ -317,7 +373,9 @@ public sealed class SetupWindow : ShellWindow
             WithMargin(presetHeader, 0, 0, 0, 10),
             WithMargin(_presetChips, 0, 0, 0, 20),
             WithMargin(Ui.Section("Input check"), 0, 0, 0, 10),
-            inputCard);
+            WithMargin(inputCard, 0, 0, 0, 20),
+            WithMargin(Ui.Section("Log"), 0, 0, 0, 10),
+            logCard);
     }
 
     private UIElement BuildRightPane()
@@ -813,8 +871,89 @@ public sealed class SetupWindow : ShellWindow
 
     private void UpdateDisk()
     {
-        AppPaths.EnsureCreated();
-        _diskText.Text = DiskInfo.Describe(AppPaths.SessionsRoot, _options.Mp3BitrateKbps);
+        try
+        {
+            AppPaths.EnsureCreated();
+        }
+        catch (Exception)
+        {
+            // A folder that can't be created yet is reported when Start is
+            // pressed (with the full diagnostic in the Log), not here — the
+            // meter and disk readout must never be what breaks on this.
+        }
+
+        var path = AppPaths.SessionsRoot;
+        _sessionsRootText.Text = path;
+        _sessionsRootText.ToolTip = path;
+        _diskText.Text = DiskInfo.Describe(path, _options.Mp3BitrateKbps);
+    }
+
+    /// <summary>
+    /// Point new sessions at a folder the operator picks. Write-probed
+    /// through the same retrying create as an actual session folder would
+    /// get, so a folder that turns out to be just as broken as the default
+    /// is reported here — with the full diagnostic in the Log — rather than
+    /// silently accepted and only discovered at Start.
+    /// </summary>
+    private void BrowseForSaveFolder()
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Choose where VoxMark saves recordings",
+        };
+
+        try
+        {
+            if (Directory.Exists(AppPaths.SessionsRoot)) dialog.InitialDirectory = AppPaths.SessionsRoot;
+        }
+        catch (Exception)
+        {
+            // An unreadable current folder is not worth failing the dialog over.
+        }
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        var chosen = dialog.FolderName;
+        try
+        {
+            AppPaths.CreateDirectory(chosen);
+        }
+        catch (Exception ex)
+        {
+            var hint = AppPaths.OneDriveHint(chosen);
+            AppendLog("Could not use \"" + chosen + "\" as the save location.\n" + FormatException(ex) +
+                      (hint.Length > 0 ? "\n" + hint : ""));
+            return;
+        }
+
+        AppSettingsStore.Save(new AppSettingsStore.Settings { SessionsRoot = chosen });
+        UpdateDisk();
+    }
+
+    private void ResetSaveFolder()
+    {
+        AppSettingsStore.Save(new AppSettingsStore.Settings { SessionsRoot = "" });
+        UpdateDisk();
+    }
+
+    /// <summary>Append one timestamped, copyable entry to the Log area.</summary>
+    private void AppendLog(string message)
+    {
+        var entry = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + message;
+        _log.Text = _log.Text == "No issues yet" ? entry : _log.Text + "\n\n" + entry;
+        _log.CaretIndex = _log.Text.Length;
+        _log.ScrollToEnd();
+    }
+
+    /// <summary>The full exception chain — type, message, HResult — for a copyable diagnostic.</summary>
+    private static string FormatException(Exception ex)
+    {
+        var lines = new List<string>();
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            lines.Add(e.GetType().FullName + ": " + e.Message + " (0x" + e.HResult.ToString("X8") + ")");
+        }
+        return string.Join("\n", lines);
     }
 
     // ----------------------------------------------------------------- presets
@@ -1121,11 +1260,15 @@ public sealed class SetupWindow : ShellWindow
         for (var i = 0; i < speakers.Count; i++) speakers[i].SlotIndex = i;
 
         _meter.Dispose();
-        AppPaths.EnsureCreated();
 
         var title = string.IsNullOrWhiteSpace(_title.Text) ? "New meeting" : _title.Text.Trim();
         var deviceName = _devices.FirstOrDefault(d => d.Id == deviceId).Name ?? "";
 
+        // Not pre-created here: SessionStore.Create's own (now hardened,
+        // retrying) directory creation already makes SessionsRoot and the
+        // per-meeting folder together, inside the try/catch below — a
+        // separate unguarded EnsureCreated() call right before it would just
+        // be the same class of crash one line earlier.
         RecordingSession session;
         try
         {
@@ -1136,6 +1279,13 @@ public sealed class SetupWindow : ShellWindow
         {
             _levelStatus.Text = "Could not create the session folder — " + ex.Message;
             _levelStatus.Foreground = Palette.RecBrush;
+
+            var folder = AppPaths.SessionsRoot;
+            var hint = AppPaths.OneDriveHint(folder);
+            AppendLog("Could not create the session folder under \"" + folder + "\".\n" +
+                      FormatException(ex) +
+                      (hint.Length > 0 ? "\n" + hint : "") +
+                      "\nYou can pick a different folder under \"Save recordings to\" above.");
             return;
         }
 

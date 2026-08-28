@@ -1,0 +1,60 @@
+using System.IO;
+using System.Text.Json;
+
+namespace MeetingRecorder.Services;
+
+/// <summary>
+/// App-level preferences that have to survive even when
+/// <c>Documents\VoxMark\</c> itself is unreachable — today, just where
+/// session folders are created. Deliberately stored under
+/// <c>%LocalAppData%\VoxMark\</c> rather than beside <c>presets.json</c> and
+/// the other <c>Documents\VoxMark\</c> files: LocalAppData is never
+/// cloud-redirected the way Documents can be, so the one setting that exists
+/// to work around a broken Documents\VoxMark\ can't itself depend on it.
+/// </summary>
+public static class AppSettingsStore
+{
+    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+
+    public sealed class Settings
+    {
+        /// <summary>
+        /// Absolute path to create session folders under, overriding
+        /// Documents\VoxMark\Sessions. Empty means "use the default".
+        /// </summary>
+        public string SessionsRoot { get; set; } = "";
+    }
+
+    private static string Path => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VoxMark", "settings.json");
+
+    public static Settings Load()
+    {
+        try
+        {
+            if (File.Exists(Path))
+            {
+                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(Path)) ?? new Settings();
+            }
+        }
+        catch (Exception)
+        {
+            // A corrupt or unreadable settings file just means the default applies.
+        }
+
+        return new Settings();
+    }
+
+    public static void Save(Settings settings)
+    {
+        try
+        {
+            AppPaths.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            File.WriteAllText(Path, JsonSerializer.Serialize(settings, Json));
+        }
+        catch (Exception)
+        {
+            // Failing to remember the choice must not block starting a meeting.
+        }
+    }
+}

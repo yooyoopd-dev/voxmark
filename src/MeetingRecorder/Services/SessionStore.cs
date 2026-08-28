@@ -25,7 +25,7 @@ public static class SessionStore
         // in advance files itself where the operator expects to find it.
         var stamp = scheduledAt.ToString("yyyy-MM-dd");
         var folder = UniqueFolder(Path.Combine(AppPaths.SessionsRoot, stamp + "_" + slug));
-        Directory.CreateDirectory(folder);
+        AppPaths.CreateDirectory(folder);
 
         var baseName = slug + "_" + stamp;
         return new RecordingSession
