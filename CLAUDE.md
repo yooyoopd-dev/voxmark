@@ -228,8 +228,8 @@ without solving the drift it reintroduces.
 Two exes from this one source tree, selected by an MSBuild property:
 
 ```powershell
--p:Edition=Full   # default: whisper.cpp + CUDA, ~250 MB, compressed
--p:Edition=Lite   # no speech recognition, ~70 MB, today's recorder exactly
+-p:Edition=Full   # default: whisper.cpp + CUDA, 229 MB, compressed
+-p:Edition=Lite   # no speech recognition, 157 MB, today's recorder exactly
 ```
 
 Lite defines `VOXMARK_LITE`, references none of the Whisper packages, and

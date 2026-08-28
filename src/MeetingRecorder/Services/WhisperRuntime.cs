@@ -279,7 +279,9 @@ public static class WhisperRuntime
         // A backend a later Whisper.net added — name it rather than claiming
         // nothing loaded, which would be the wrong thing to tell an operator
         // whose transcription is in fact running.
-        var other => other.ToString(),
+        // .Value is safe: the null arm above already matched. Without it the
+        // compiler sees object.ToString()'s nullable return and warns.
+        var other => other.Value.ToString(),
     };
 
     /// <summary>"ggml-small.en.bin" reads better in a header as "small.en".</summary>

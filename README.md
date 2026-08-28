@@ -25,13 +25,16 @@ There are two files in the Assets list. Both are the same app; pick one.
 
 | | Size | Speech recognition |
 |---|---|---|
-| **`VoxMark-Lite.exe`** | ~70 MB | No — records and marks, exactly as before |
-| **`VoxMark.exe`** | ~250 MB | Yes — whisper on your GPU or CPU |
+| **`VoxMark-Lite.exe`** | 157 MB | No — records and marks, exactly as before |
+| **`VoxMark.exe`** | 229 MB | Yes — whisper on your GPU or CPU |
 
-**Take Lite unless you want transcription.** The full build is large only
-because it carries the whisper engine and its CUDA kernels; everything else
-about the two is identical, and a session recorded with one opens in the
-other.
+**Take Lite unless you want transcription.** Everything else about the two is
+identical, and a session recorded with one opens in the other.
+
+Both are large because each one carries the entire .NET runtime and WPF — that
+is the price of an exe that needs no install. The full build adds the whisper
+engine and its CUDA kernels on top, but is compressed, which is why the gap
+between them is smaller than the payload it carries.
 
 No GitHub account, no login, no sign-up — release files are public, so you
 can download them on any PC.
@@ -56,8 +59,8 @@ registry, and there is no uninstaller — to remove VoxMark, delete the file.
 **Requirements:** 64-bit Windows 10 or 11. Nothing else. You do **not** need
 to install the .NET runtime, ffmpeg, or any codec — the .NET runtime and the
 MP3 encoder are embedded inside the exe, which is why it is a fairly large
-download. The full build's first launch takes a few seconds longer than the
-rest while it unpacks the speech engine; after that it starts normally.
+download. The full build is compressed, so its first launch takes a few
+seconds longer while it unpacks; after that it starts normally.
 
 For GPU-accelerated transcription you need an NVIDIA card and a reasonably
 current NVIDIA driver — no CUDA Toolkit install, the kernels are inside the
