@@ -115,18 +115,23 @@ deliverable.
 ## Releasing a new version
 
 [`.github/workflows/build-windows-exe.yml`](.github/workflows/build-windows-exe.yml)
-builds the exe on every push to `main` and on every pull request. Pushing a
-`v*` tag additionally attaches `VoxMark.exe` to that tag's GitHub Release,
-which is what makes it downloadable without a login:
+builds the exe on every push to `main` and on every pull request. Publishing a
+release attaches `VoxMark.exe` to it, which is what makes the build
+downloadable without a login. There are two ways to trigger that:
+
+**From the Actions tab** — open *Build Windows EXE*, click **Run workflow**,
+and type the version (`v1.1.0`). The workflow creates the tag and the release
+itself, so this needs no local git and no push rights.
+
+**By pushing a tag:**
 
 ```bash
-git tag -a v1.0.1 -m "VoxMark 1.0.1"
-git push origin v1.0.1
+git tag -a v1.1.0 -m "VoxMark 1.1.0"
+git push origin v1.1.0
 ```
 
-(Or use **Releases → Draft a new release** on GitHub and create the tag
-there.) Once the workflow finishes, the exe appears under that release's
-Assets.
+Either way the exe appears under that release's Assets once the run
+finishes.
 
 ## Design and scope
 
