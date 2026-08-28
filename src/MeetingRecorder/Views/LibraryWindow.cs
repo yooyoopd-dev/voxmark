@@ -23,6 +23,9 @@ namespace MeetingRecorder.Views;
 public sealed class LibraryWindow : ShellWindow
 {
     private readonly StackPanel _rows = new();
+    private readonly StackPanel _plans = new();
+    private readonly TextBlock _plansHeading;
+    private readonly Border _plansSection;
 
     public LibraryWindow() : base("VoxMark", 1000, 720)
     {
@@ -39,11 +42,29 @@ public sealed class LibraryWindow : ShellWindow
         var header = Ui.Columns(1, heading, Ui.Filler(), newMeeting);
         header.Margin = new Thickness(0, 0, 0, 18);
 
+        _plansHeading = Ui.Section("Ready to record · 0");
+        _plansSection = new Border
+        {
+            Margin = new Thickness(0, 0, 0, 20),
+            Child = Ui.Vertical(10,
+                Ui.Columns(0,
+                    _plansHeading,
+                    Ui.Text("meetings you set up earlier — pick one to open its setup", 12,
+                        Palette.TextMutedBrush)),
+                _plans),
+        };
+
+        var stack = new StackPanel();
+        stack.Children.Add(_plansSection);
+        stack.Children.Add(Ui.Section("Recorded sessions"));
+        _rows.Margin = new Thickness(0, 10, 0, 0);
+        stack.Children.Add(_rows);
+
         var scroller = new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = _rows,
+            Content = stack,
         };
 
         var footnote = Ui.Wrap(
@@ -83,6 +104,7 @@ public sealed class LibraryWindow : ShellWindow
 
     private void Reload()
     {
+        ReloadPlans();
         _rows.Children.Clear();
 
         List<RecordingSession> sessions;
@@ -105,6 +127,77 @@ public sealed class LibraryWindow : ShellWindow
         {
             _rows.Children.Add(Row(session));
         }
+    }
+
+    /// <summary>
+    /// The meetings the operator prepared in advance. Section 07 gives the
+    /// library "past sessions, new meeting"; this is the third thing an
+    /// operator walking into a room actually wants — the meeting they already
+    /// set up, one click from Start.
+    /// </summary>
+    private void ReloadPlans()
+    {
+        _plans.Children.Clear();
+
+        List<MeetingPlan> plans;
+        try
+        {
+            plans = PlanStore.Load();
+        }
+        catch (Exception)
+        {
+            plans = new List<MeetingPlan>();
+        }
+
+        _plansHeading.Text = ("Ready to record · " + plans.Count).ToUpperInvariant();
+        _plansSection.Visibility = plans.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        foreach (var plan in plans)
+        {
+            _plans.Children.Add(PlanRow(plan));
+        }
+    }
+
+    private UIElement PlanRow(MeetingPlan plan)
+    {
+        var roster = plan.Speakers.Count == 0
+            ? "no roster yet"
+            : plan.Speakers.Count + " speakers · " +
+              string.Join(", ", plan.Speakers.Take(3).Select(s => s.Name)) +
+              (plan.Speakers.Count > 3 ? " …" : "");
+
+        var identity = Ui.Vertical(2,
+            Ui.Text(plan.Title, 15),
+            Ui.Mono(plan.WhenLabel + (string.IsNullOrWhiteSpace(plan.Room) ? "" : " · " + plan.Room) +
+                    " · " + roster, 11.5, Palette.TextMutedBrush));
+
+        var options = Ui.Mono(
+            plan.Options.SplitMinutes > 0 ? "split " + plan.Options.SplitMinutes + " min" : "one file",
+            11.5, Palette.TextMutedBrush);
+        options.Margin = new Thickness(0, 0, 14, 0);
+
+        var open = Ui.MakeButton("Open setup", null, "ChipButtonAccent", (_, _) => OpenPlan(plan));
+        var remove = Ui.MakeButton("✕", null, "ChipButton", (_, _) =>
+        {
+            PlanStore.Remove(plan.Id);
+            ReloadPlans();
+        });
+        remove.Foreground = Palette.TextMutedBrush;
+        remove.Margin = new Thickness(8, 0, 0, 0);
+        remove.ToolTip = "Forget this saved setup";
+
+        var row = Ui.Columns(0, identity, options, open, remove);
+        var card = Ui.Card(row, new Thickness(15, 13, 15, 13), Palette.AccentEdgeBrush);
+        card.Margin = new Thickness(0, 0, 0, 7);
+        card.Cursor = Cursors.Hand;
+        card.MouseLeftButtonUp += (_, _) => OpenPlan(plan);
+        return card;
+    }
+
+    private void OpenPlan(MeetingPlan plan)
+    {
+        new SetupWindow(plan).Show();
+        Close();
     }
 
     private UIElement EmptyState()
@@ -217,7 +310,12 @@ public sealed class LibraryWindow : ShellWindow
 
             var duration = session.AudioDurationSeconds > 0
                 ? session.AudioDurationSeconds
-                : SessionStore.EstimateMp3Seconds(session.Mp3Path, session.Options.Mp3BitrateKbps);
+                : session.AudioParts.Sum(p => SessionStore.EstimateMp3Seconds(
+                      session.PathOf(p), session.Options.Mp3BitrateKbps));
+            if (duration <= 0)
+            {
+                duration = SessionStore.EstimateMp3Seconds(session.Mp3Path, session.Options.Mp3BitrateKbps);
+            }
 
             foreach (var pending in open)
             {
@@ -250,7 +348,17 @@ public sealed class LibraryWindow : ShellWindow
             session.Notes.Add("This session was recovered from the on-disk journal after the app closed unexpectedly.");
             session.Completed = true;
 
-            File.WriteAllText(session.MarkdownPath, MarkdownExporter.Build(session), new System.Text.UTF8Encoding(false));
+            // A recovered session may have rolled through several MP3s, so it
+            // gets the same one-Markdown-per-file treatment as a clean stop.
+            var parts = session.EffectiveParts();
+            if (parts.Count > 0) parts[^1].EndSeconds = Math.Max(parts[^1].EndSeconds, duration);
+            foreach (var part in parts)
+            {
+                File.WriteAllText(
+                    session.MarkdownPathOf(part),
+                    MarkdownExporter.Build(session, part, parts.Count),
+                    new System.Text.UTF8Encoding(false));
+            }
             SessionStore.Save(session);
 
             var export = new ExportWindow(session, alreadyWritten: true);

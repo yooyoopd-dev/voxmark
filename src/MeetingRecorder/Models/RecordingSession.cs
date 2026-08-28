@@ -13,7 +13,19 @@ public sealed class RecordingSession
     public string Title { get; set; } = "";
     public string Room { get; set; } = "";
     public string SessionFolder { get; set; } = "";
+
+    /// <summary>The first (or only) MP3. Kept for the library and the summary screen.</summary>
     public string AudioFileName { get; set; } = "";
+
+    /// <summary>File name stem without the extension — parts append "_partNN" to it.</summary>
+    public string AudioBaseName { get; set; } = "";
+
+    /// <summary>
+    /// Every MP3 this session wrote, in order. One entry unless the operator
+    /// asked to split the recording; each entry carries where it sits on the
+    /// session-wide timeline.
+    /// </summary>
+    public List<AudioPart> AudioParts { get; set; } = new();
 
     public List<Speaker> Speakers { get; set; } = new();
     public SessionOptions Options { get; set; } = new();
@@ -22,6 +34,14 @@ public sealed class RecordingSession
 
     /// <summary>Written verbatim into the Markdown's <c>audio_format</c> field.</summary>
     public string AudioFormatDescription { get; set; } = "mp3 / 128 kbps / 44100 Hz / mono";
+
+    /// <summary>
+    /// When the meeting was scheduled for, as typed on the setup screen. It
+    /// names the session folder and lets a plan be prepared in advance; the
+    /// Markdown's <c>date</c> stays <see cref="StartedAt"/>, the moment
+    /// recording actually began.
+    /// </summary>
+    public DateTimeOffset ScheduledAt { get; set; }
 
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
@@ -53,5 +73,35 @@ public sealed class RecordingSession
     /// <summary>Speakers that appear in the Markdown roster — absent ones keep their slot but are left out.</summary>
     [JsonIgnore] public IEnumerable<Speaker> PresentSpeakers => Speakers.Where(s => !s.IsAbsent);
 
+    /// <summary>True when the recording was rolled into more than one MP3.</summary>
+    [JsonIgnore] public bool IsSplit => AudioParts.Count > 1;
+
     public Speaker? SpeakerForSlot(int slot) => Speakers.FirstOrDefault(s => s.SlotIndex == slot);
+
+    /// <summary>Absolute path of one part's MP3.</summary>
+    public string PathOf(AudioPart part) => Path.Combine(SessionFolder, part.FileName);
+
+    /// <summary>The Markdown that goes with one part — same stem, ".md".</summary>
+    public string MarkdownPathOf(AudioPart part) =>
+        Path.Combine(SessionFolder, Path.ChangeExtension(part.FileName, ".md"));
+
+    /// <summary>
+    /// The parts as they should be treated for export. A session recorded
+    /// before parts existed, or recovered from an older folder, still has to
+    /// produce exactly one file, so it gets a synthetic single part.
+    /// </summary>
+    public List<AudioPart> EffectiveParts()
+    {
+        if (AudioParts.Count > 0) return AudioParts;
+        return new List<AudioPart>
+        {
+            new()
+            {
+                Index = 1,
+                FileName = AudioFileName,
+                StartSeconds = 0,
+                EndSeconds = AudioDurationSeconds,
+            },
+        };
+    }
 }

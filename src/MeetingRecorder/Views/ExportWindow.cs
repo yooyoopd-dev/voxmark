@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using MeetingRecorder.Models;
 using MeetingRecorder.Services;
@@ -17,49 +18,35 @@ namespace MeetingRecorder.Views;
 /// re-encoded from scratch: this is a finalise pass. Unmarked time is
 /// reported honestly rather than hidden, because it tells the operator how
 /// much of the transcript will come back without a speaker attached.
+///
+/// A session split into several MP3s lists every file it produced, each with
+/// the Markdown that goes with it.
 /// </summary>
 public sealed class ExportWindow : ShellWindow
 {
     private readonly RecordingSession _session;
-
-    private readonly TextBlock _audioStatus;
-    private readonly TextBlock _markdownStatus;
-    private readonly TextBlock _audioTick;
-    private readonly TextBlock _markdownTick;
-    private readonly Border _audioProgress;
-    private readonly Border _markdownProgress;
-    private readonly Border _audioTrack;
-    private readonly Border _markdownTrack;
+    private readonly List<AudioPart> _parts;
+    private readonly StackPanel _files = new();
     private readonly StackPanel _summary = new();
+    private readonly TextBlock _filesHeading;
     private readonly Button _copyButton;
 
     public ExportWindow(RecordingSession session, bool alreadyWritten)
-        : base("Finishing — " + session.Title, 720, 760)
+        : base("Finishing — " + session.Title, 760, 800)
     {
         _session = session;
+        _parts = session.EffectiveParts();
         MinWidth = 620;
         MinHeight = 620;
 
-        _audioTick = Ui.Text("✓", 13, Palette.GoodBrush);
-        _markdownTick = Ui.Text(alreadyWritten ? "✓" : "◐", 13,
-            alreadyWritten ? Palette.GoodBrush : Palette.AccentBrush);
-
-        _audioStatus = Ui.Mono(FileSize(session.Mp3Path), 12, Palette.TextMutedBrush);
-        _markdownStatus = Ui.Mono(
-            alreadyWritten ? FileSize(session.MarkdownPath) : "writing " + session.Marks.Count + " marks…",
-            12, Palette.TextMutedBrush);
-
-        _audioProgress = ProgressFill(Palette.GoodBrush, 1);
-        _markdownProgress = ProgressFill(Palette.AccentBrush, alreadyWritten ? 1 : 0.1);
-        _audioTrack = ProgressTrack(_audioProgress);
-        _markdownTrack = ProgressTrack(_markdownProgress);
-
+        _filesHeading = Ui.Section("Files");
         _copyButton = Ui.MakeButton("Copy Markdown", null, "GhostButton", (_, _) => CopyMarkdown());
         _copyButton.MinHeight = 40;
         _copyButton.Margin = new Thickness(10, 0, 0, 0);
 
-        SetBody(BuildBody(alreadyWritten));
+        SetBody(BuildBody());
         BuildSummary();
+        RefreshFiles(alreadyWritten ? "written" : "pending");
 
         Bar.CanMaximise = false;
 
@@ -71,17 +58,21 @@ public sealed class ExportWindow : ShellWindow
         }
     }
 
-    private UIElement BuildBody(bool alreadyWritten)
+    private UIElement BuildBody()
     {
         var heading = Ui.Text("Recording stopped · " + Ui.Clock(_session.AudioDurationSeconds), 22);
+
         var blurb = Ui.Wrap(
             "Audio was written continuously during the meeting, so nothing is being re-encoded from scratch — " +
-            "this is a finalise pass.", 13.5, Palette.TextDimBrush);
+            "this is a finalise pass." +
+            (_parts.Count > 1
+                ? " The recording was split into " + _parts.Count +
+                  " files; each one gets its own Markdown, and the timestamps keep counting from the first file."
+                : ""),
+            13.5, Palette.TextDimBrush);
         blurb.Margin = new Thickness(0, 6, 0, 20);
 
-        var audioCard = FileCard(_audioTick, Path.GetFileName(_session.Mp3Path), _audioStatus, _audioTrack);
-        var markdownCard = FileCard(_markdownTick, Path.GetFileName(_session.MarkdownPath), _markdownStatus, _markdownTrack);
-        audioCard.Margin = new Thickness(0, 0, 0, 10);
+        var filesCard = Ui.Card(Ui.Vertical(12, _filesHeading, _files), new Thickness(15));
 
         var summaryCard = Ui.Card(Ui.Vertical(12,
             Ui.Section("Session summary"),
@@ -89,7 +80,7 @@ public sealed class ExportWindow : ShellWindow
             Ui.Wrap("Unmarked time is reported honestly rather than hidden — it tells you how much of the " +
                     "transcript will come back without a speaker attached.", 12, Palette.TextMutedBrush)),
             new Thickness(15), Palette.HairlineSoftBrush, Palette.WellBrush);
-        summaryCard.Margin = new Thickness(0, 20, 0, 0);
+        summaryCard.Margin = new Thickness(0, 12, 0, 0);
 
         var openFolder = Ui.MakeButton("Open folder", null, "GhostButton", (_, _) => OpenFolder());
         openFolder.MinHeight = 40;
@@ -102,8 +93,7 @@ public sealed class ExportWindow : ShellWindow
         var content = new StackPanel();
         content.Children.Add(heading);
         content.Children.Add(blurb);
-        content.Children.Add(audioCard);
-        content.Children.Add(markdownCard);
+        content.Children.Add(filesCard);
         content.Children.Add(summaryCard);
         content.Children.Add(actions);
 
@@ -115,69 +105,68 @@ public sealed class ExportWindow : ShellWindow
         };
     }
 
-    private static Border ProgressFill(System.Windows.Media.Brush brush, double fraction) => new()
+    /// <summary>Redraw the file list. <paramref name="markdownState"/> is "pending", "written" or an error.</summary>
+    private void RefreshFiles(string markdownState)
     {
-        Height = 5,
-        Background = brush,
-        HorizontalAlignment = HorizontalAlignment.Left,
-        CornerRadius = new CornerRadius(3),
-        Tag = fraction,
-    };
+        _files.Children.Clear();
+        _filesHeading.Text = ("Files · " + (_parts.Count * 2)).ToUpperInvariant();
 
-    private static Border ProgressTrack(Border fill)
-    {
-        var track = new Border
+        foreach (var part in _parts)
         {
-            Height = 5,
-            Background = Palette.WellBrush,
-            CornerRadius = new CornerRadius(3),
-            Child = fill,
-        };
-        track.SizeChanged += (_, _) =>
+            var audioPath = _session.PathOf(part);
+            _files.Children.Add(FileRow("✓", Palette.GoodBrush, part.FileName, FileSize(audioPath)));
+
+            var markdownPath = _session.MarkdownPathOf(part);
+            var written = File.Exists(markdownPath);
+            var glyph = markdownState == "written" || written ? "✓" : markdownState == "pending" ? "◐" : "✕";
+            var brush = markdownState == "written" || written
+                ? Palette.GoodBrush
+                : markdownState == "pending" ? Palette.AccentBrush : Palette.RecBrush;
+            var detail = written ? FileSize(markdownPath)
+                : markdownState == "pending" ? "writing…" : markdownState;
+
+            _files.Children.Add(FileRow(glyph, brush, Path.GetFileName(markdownPath), detail));
+        }
+
+        if (_parts.Count > 1)
         {
-            var fraction = fill.Tag is double value ? value : 0;
-            fill.Width = Math.Max(0, track.ActualWidth * fraction);
-        };
-        return track;
+            _files.Children.Add(Ui.Wrap(
+                "Every Markdown carries audio_part_start — subtract it from a timestamp to seek inside that file.",
+                11.5, Palette.TextMutedBrush));
+        }
     }
 
-    private static void SetProgress(Border track, Border fill, double fraction)
+    private static UIElement FileRow(string glyph, Brush glyphBrush, string name, string detail)
     {
-        fill.Tag = fraction;
-        fill.Width = Math.Max(0, track.ActualWidth * fraction);
-    }
+        var tick = Ui.Text(glyph, 13, glyphBrush);
+        tick.Width = 18;
 
-    private static Border FileCard(TextBlock tick, string fileName, TextBlock status, Border track)
-    {
         var row = Ui.Columns(1,
             tick,
-            Ui.Mono("  " + fileName, 13.5, Palette.TextBrush),
-            status);
-        row.Margin = new Thickness(0, 0, 0, 9);
-
-        return Ui.Card(Ui.Vertical(0, row, track), new Thickness(15, 13, 15, 13));
+            Ui.Mono(name, 13, Palette.TextBrush),
+            Ui.Mono(detail, 12, Palette.TextMutedBrush));
+        row.Margin = new Thickness(0, 0, 0, 6);
+        return row;
     }
 
+    /// <summary>Write one Markdown per audio file. UTF-8, LF, no BOM — section 10.</summary>
     private void WriteMarkdown()
     {
         try
         {
-            // UTF-8, LF, no BOM — section 10.
-            File.WriteAllText(_session.MarkdownPath, MarkdownExporter.Build(_session), new UTF8Encoding(false));
+            foreach (var part in _parts)
+            {
+                var markdown = MarkdownExporter.Build(_session, part, _parts.Count);
+                File.WriteAllText(_session.MarkdownPathOf(part), markdown, new UTF8Encoding(false));
+            }
+
             _session.Completed = true;
             SessionStore.Save(_session);
-
-            _markdownTick.Text = "✓";
-            _markdownTick.Foreground = Palette.GoodBrush;
-            _markdownStatus.Text = FileSize(_session.MarkdownPath);
-            SetProgress(_markdownTrack, _markdownProgress, 1);
+            RefreshFiles("written");
         }
         catch (Exception ex)
         {
-            _markdownTick.Text = "✕";
-            _markdownTick.Foreground = Palette.RecBrush;
-            _markdownStatus.Text = ex.Message;
-            _markdownStatus.Foreground = Palette.RecBrush;
+            RefreshFiles(ex.Message);
         }
     }
 
@@ -212,8 +201,8 @@ public sealed class ExportWindow : ShellWindow
         }
     }
 
-    private static UIElement SummaryRow(string name, System.Windows.Media.Brush colour, double seconds,
-                                        double total, bool muted = false)
+    private static UIElement SummaryRow(string name, Brush colour, double seconds, double total,
+                                        bool muted = false)
     {
         var share = Math.Clamp(seconds / total, 0, 1);
 
@@ -235,7 +224,6 @@ public sealed class ExportWindow : ShellWindow
             Background = colour,
             CornerRadius = new CornerRadius(4),
             HorizontalAlignment = HorizontalAlignment.Left,
-            Tag = share,
         };
         var track = new Border
         {
@@ -273,12 +261,23 @@ public sealed class ExportWindow : ShellWindow
         }
     }
 
+    /// <summary>Copy every Markdown, so a split session can still be pasted in one go.</summary>
     private void CopyMarkdown()
     {
         try
         {
-            Clipboard.SetText(File.ReadAllText(_session.MarkdownPath));
-            _copyButton.Content = "Copied";
+            var sb = new StringBuilder();
+            foreach (var part in _parts)
+            {
+                var path = _session.MarkdownPathOf(part);
+                if (!File.Exists(path)) continue;
+                if (sb.Length > 0) sb.Append("\n\n");
+                if (_parts.Count > 1) sb.Append("<!-- ").Append(Path.GetFileName(path)).Append(" -->\n");
+                sb.Append(File.ReadAllText(path));
+            }
+
+            Clipboard.SetText(sb.ToString());
+            _copyButton.Content = _parts.Count > 1 ? "Copied " + _parts.Count + " files" : "Copied";
         }
         catch (Exception)
         {

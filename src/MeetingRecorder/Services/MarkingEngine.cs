@@ -220,6 +220,54 @@ public sealed class MarkingEngine
         return mark;
     }
 
+    /// <summary>
+    /// Move the start of the mark that is open right now, without closing it.
+    ///
+    /// This is the live repair for the most common miss: the key was pressed a
+    /// beat late or a beat early. The handover boundary moves as one — the
+    /// mark that ended where this one began is trimmed or extended to follow,
+    /// so the timeline never grows a gap or an overlap from a nudge. It
+    /// cannot be dragged back past the previous mark's own start.
+    /// </summary>
+    public bool NudgeOpenStart(double delta)
+    {
+        if (_open.Count == 0) return false;
+
+        var open = _open[^1];
+        var previous = _marks
+            .Where(m => m.StartSeconds < open.StartSeconds)
+            .OrderByDescending(m => m.StartSeconds)
+            .FirstOrDefault();
+
+        var floor = previous is null ? 0 : previous.StartSeconds + MinimumMarkSeconds;
+        var ceiling = Math.Max(floor, CurrentFileSeconds - MinimumMarkSeconds);
+        var target = Math.Clamp(open.StartSeconds + delta, floor, ceiling);
+        if (Math.Abs(target - open.StartSeconds) < 1e-9) return false;
+
+        var before = Capture();
+        open.StartSeconds = target;
+
+        if (!_options.AllowOverlappingMarks)
+        {
+            foreach (var other in _marks.ToList())
+            {
+                if (other.EndSeconds <= target) continue;
+                if (other.StartSeconds >= target)
+                {
+                    // Only reachable if the floor let us pass a whole mark;
+                    // drop it rather than leave a zero-length sliver behind.
+                    _marks.Remove(other);
+                    Announce("Removed " + NameOf(other.SpeakerSlot) + "'s mark — the new start ran past it");
+                    continue;
+                }
+                other.EndSeconds = target;
+            }
+        }
+
+        Commit(before);
+        return true;
+    }
+
     // ------------------------------------------------------------------- repair
 
     public Mark? ById(long id) => _marks.FirstOrDefault(m => m.Id == id);

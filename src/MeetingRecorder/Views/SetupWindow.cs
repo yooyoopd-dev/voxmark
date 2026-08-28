@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -27,7 +28,8 @@ public sealed class SetupWindow : ShellWindow
 
     private readonly TextBox _title;
     private readonly TextBox _room;
-    private readonly TextBlock _dateTime;
+    private readonly TextBox _dateTime;
+    private readonly TextBlock _dateHint;
     private readonly Dropdown _device;
     private readonly Border _levelFill;
     private readonly Border _levelTrack;
@@ -39,20 +41,31 @@ public sealed class SetupWindow : ShellWindow
     private readonly TextBlock _folderPreview;
     private readonly CheckBox _overlapToggle;
     private readonly Dropdown _offset;
+    private readonly Dropdown _split;
 
     private List<Preset> _presets = new();
     private RosterRow? _capturingRow;
     private RosterRow? _dragSource;
     private double _peak;
+    private string _planId = "";
 
-    public SetupWindow() : base("New meeting — setup", 1180, 800)
+    /// <summary>
+    /// A blank setup, or one seeded from a meeting the operator saved
+    /// earlier — same screen either way, so a plan is just a starting point
+    /// that can still be edited before Start.
+    /// </summary>
+    public SetupWindow(MeetingPlan? plan = null)
+        : base(plan is null ? "New meeting — setup" : "Setup — " + plan.Title, 1180, 800)
     {
         MinWidth = 980;
         MinHeight = 700;
 
-        _title = Field("Weekly Product Review", 15);
-        _room = Field("", 14);
-        _dateTime = Ui.Mono(DateTime.Now.ToString("yyyy-MM-dd HH:mm"), 14, Palette.TextBrush);
+        _title = Field(plan?.Title ?? "Weekly Product Review", 15);
+        _room = Field(plan?.Room ?? "", 14);
+        _dateTime = Field((plan?.ScheduledAt ?? DateTimeOffset.Now).ToString("yyyy-MM-dd HH:mm"), 14);
+        _dateTime.FontFamily = Ui.MonoFont;
+        _dateHint = Ui.Text("", 10, Palette.RecBrush);
+        _dateHint.Visibility = Visibility.Collapsed;
 
         _device = new Dropdown { MinHeight = 34 };
         _device.SelectionChanged += _ => OnDeviceChanged();
@@ -90,12 +103,39 @@ public sealed class SetupWindow : ShellWindow
         {
             ("−0.0 s", 0.0), ("−0.4 s", 0.4), ("−0.8 s", 0.8), ("−1.2 s", 1.2), ("−1.6 s", 1.6),
         });
-        _offset.Select(0.8);
-        _offset.DisplayText = "−0.8 s";
         _offset.SelectionChanged += value =>
         {
             if (value is double seconds) _options.MarkStartOffsetSeconds = seconds;
         };
+
+        _split = new Dropdown("ChipButton") { MinHeight = 26 };
+        _split.SetItems(new (string, object)[]
+        {
+            ("One file", 0), ("Every 10 min", 10), ("Every 15 min", 15),
+            ("Every 30 min", 30), ("Every 60 min", 60),
+        });
+        _split.SelectionChanged += value =>
+        {
+            if (value is int minutes) _options.SplitMinutes = minutes;
+        };
+
+        if (plan is not null)
+        {
+            _planId = plan.Id;
+            _options.AllowOverlappingMarks = plan.Options.AllowOverlappingMarks;
+            _options.MarkStartOffsetSeconds = plan.Options.MarkStartOffsetSeconds;
+            _options.Mp3BitrateKbps = plan.Options.Mp3BitrateKbps;
+            _options.SplitMinutes = plan.Options.SplitMinutes;
+            _roster.AddRange(plan.Speakers.Select(sp => sp.Clone()));
+        }
+
+        _overlapToggle.IsChecked = _options.AllowOverlappingMarks;
+        _offset.Select(_options.MarkStartOffsetSeconds);
+        _offset.DisplayText = "−" + _options.MarkStartOffsetSeconds.ToString("0.0") + " s";
+        _split.Select(_options.SplitMinutes);
+        _split.DisplayText = _options.SplitMinutes > 0
+            ? "Every " + _options.SplitMinutes + " min"
+            : "One file";
 
         SetBody(BuildBody());
 
@@ -167,8 +207,11 @@ public sealed class SetupWindow : ShellWindow
             _title), new Thickness(13, 11, 13, 11));
 
         var dateCard = Ui.Card(Ui.Vertical(2,
-            Ui.Text("Date & time", 10, Palette.TextMutedBrush),
+            Ui.Columns(0,
+                Ui.Text("Date & time", 10, Palette.TextMutedBrush),
+                _dateHint),
             _dateTime), new Thickness(13, 11, 13, 11));
+        _dateTime.TextChanged += (_, _) => ValidateDate();
 
         var roomCard = Ui.Card(Ui.Vertical(2,
             Ui.Text("Room", 10, Palette.TextMutedBrush),
@@ -259,16 +302,25 @@ public sealed class SetupWindow : ShellWindow
             Ui.Filler(),
             _offset);
 
+        var splitRow = Ui.Columns(1,
+            Ui.Text("Split recording", 13.5, Palette.TextBrush),
+            Ui.Filler(),
+            _split);
+
         var optionsCard = Ui.Card(Ui.Vertical(0,
             Pad(format, 11),
             Ui.Rule(),
             Pad(overlap, 11),
             Ui.Rule(),
-            Pad(offsetRow, 11)), new Thickness(13, 2, 13, 2));
+            Pad(offsetRow, 11),
+            Ui.Rule(),
+            Pad(splitRow, 11)), new Thickness(13, 2, 13, 2));
 
         var offsetNote = Ui.Wrap(
-            "A human presses the key after the speaker has already begun. Every mark start is shifted back " +
-            "by this offset automatically; the raw press time is kept in the log so the offset can be re-tuned later.",
+            "A human presses the key after the speaker has already begun, so every mark start is shifted back " +
+            "by the offset automatically; the raw press time is kept in the log so it can be re-tuned later. " +
+            "Splitting rolls to a new MP3 on the chosen interval and writes a matching Markdown for each one — " +
+            "timestamps keep counting from the first file, so they mean the same thing in every chunk.",
             11.5, Palette.TextMutedBrush);
         offsetNote.Margin = new Thickness(2, 9, 2, 0);
 
@@ -289,10 +341,20 @@ public sealed class SetupWindow : ShellWindow
         savePreset.MinHeight = 40;
         savePreset.Margin = new Thickness(0, 0, 10, 0);
 
-        var row = Ui.Columns(2,
+        var saveSetup = Ui.MakeButton("Save setup", "Ctrl+S", "OutlineAccentButton", (_, _) => SaveSetup());
+        saveSetup.MinHeight = 40;
+        saveSetup.Margin = new Thickness(0, 0, 10, 0);
+
+        var back = Ui.MakeButton("← Back", null, "GhostButton", (_, _) => GoBack());
+        back.MinHeight = 40;
+        back.Margin = new Thickness(0, 0, 14, 0);
+
+        var row = Ui.Columns(3,
+            back,
             Ui.Text("Session folder", 12.5, Palette.TextMutedBrush),
             Pad(_folderPreview, 0, 10),
             Ui.Filler(),
+            saveSetup,
             savePreset,
             start);
         row.Margin = new Thickness(20, 14, 20, 14);
@@ -449,6 +511,11 @@ public sealed class SetupWindow : ShellWindow
         else if (ctrl && e.Key == Key.N)
         {
             AddSpeaker();
+            e.Handled = true;
+        }
+        else if (ctrl && e.Key == Key.S)
+        {
+            SaveSetup();
             e.Handled = true;
         }
     }
@@ -674,7 +741,79 @@ public sealed class SetupWindow : ShellWindow
         var title = string.IsNullOrWhiteSpace(_title.Text) ? "New meeting" : _title.Text.Trim();
         _folderPreview.Text = System.IO.Path.Combine(
             AppPaths.SessionsRoot,
-            DateTime.Now.ToString("yyyy-MM-dd") + "_" + AppPaths.Slugify(title)) + "\\";
+            ScheduledAt().ToString("yyyy-MM-dd") + "_" + AppPaths.Slugify(title)) + "\\";
+    }
+
+    /// <summary>
+    /// The meeting's own date and time. Free text so it can be typed ahead of
+    /// the meeting; anything unparseable falls back to now and says so rather
+    /// than silently filing the session under the wrong day.
+    /// </summary>
+    private DateTimeOffset ScheduledAt()
+    {
+        return TryParseDate(out var parsed) ? parsed : DateTimeOffset.Now;
+    }
+
+    private bool TryParseDate(out DateTimeOffset value)
+    {
+        var text = _dateTime.Text.Trim();
+        if (DateTimeOffset.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out value)) return true;
+        if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out value)) return true;
+        value = DateTimeOffset.Now;
+        return false;
+    }
+
+    private void ValidateDate()
+    {
+        var ok = TryParseDate(out _);
+        _dateHint.Text = ok ? "" : "unrecognised — using now";
+        _dateHint.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
+        _dateTime.Foreground = ok ? Palette.TextBrush : Palette.RecBrush;
+        UpdateFolderPreview();
+    }
+
+    /// <summary>Save the whole meeting — title, time, room, roster, options — for later.</summary>
+    private void SaveSetup()
+    {
+        var title = string.IsNullOrWhiteSpace(_title.Text) ? "New meeting" : _title.Text.Trim();
+        var plan = new MeetingPlan
+        {
+            Title = title,
+            Room = _room.Text.Trim(),
+            ScheduledAt = ScheduledAt(),
+            Speakers = _roster.Where(sp => !string.IsNullOrWhiteSpace(sp.Name)).Select(sp => sp.Clone()).ToList(),
+            Options = new SessionOptions
+            {
+                AllowOverlappingMarks = _options.AllowOverlappingMarks,
+                MarkStartOffsetSeconds = _options.MarkStartOffsetSeconds,
+                Mp3BitrateKbps = _options.Mp3BitrateKbps,
+                SplitMinutes = _options.SplitMinutes,
+            },
+        };
+        // Re-saving an opened plan updates it in place instead of piling up
+        // near-identical copies in the library.
+        if (!string.IsNullOrEmpty(_planId)) plan.Id = _planId;
+
+        try
+        {
+            PlanStore.Upsert(plan);
+            _planId = plan.Id;
+            SetTitle("Setup — " + title);
+            _levelStatus.Text = "Setup saved — it is waiting in the library";
+            _levelStatus.Foreground = Palette.GoodBrush;
+        }
+        catch (Exception ex)
+        {
+            _levelStatus.Text = "Could not save the setup — " + ex.Message;
+            _levelStatus.Foreground = Palette.RecBrush;
+        }
+    }
+
+    private void GoBack()
+    {
+        _meter.Dispose();
+        new LibraryWindow().Show();
+        Close();
     }
 
     private void StartRecording()
@@ -708,7 +847,7 @@ public sealed class SetupWindow : ShellWindow
         try
         {
             session = SessionStore.Create(title, _room.Text.Trim(), speakers, _options, deviceName,
-                DateTimeOffset.Now);
+                ScheduledAt(), DateTimeOffset.Now);
         }
         catch (Exception ex)
         {
