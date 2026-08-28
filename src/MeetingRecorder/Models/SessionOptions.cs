@@ -27,4 +27,28 @@ public sealed class SessionOptions
     /// of part 1 — so a mark's time means the same thing in every chunk.
     /// </summary>
     public int SplitMinutes { get; set; }
+
+    /// <summary>
+    /// Run speech recognition alongside the recording, so the exported
+    /// Markdown carries the words as well as the timings.
+    ///
+    /// Off by default, and off in the Lite edition regardless: transcription
+    /// is a passive tap on the audio that must never be able to affect
+    /// capture, and the safest version of that is not starting it unasked.
+    /// </summary>
+    public bool TranscriptionEnabled { get; set; }
+
+    /// <summary>
+    /// Absolute path to a local whisper ggml model file. Nothing is ever
+    /// downloaded — the operator supplies this file — so an empty value
+    /// means "look in Documents\VoxMark\Models\", not "fetch one".
+    /// </summary>
+    public string WhisperModelPath { get; set; } = "";
+
+    /// <summary>
+    /// Whisper language code, or "auto" to let it detect. Defaults to English
+    /// because the models worth running on a laptop GPU are the *.en ones,
+    /// which only speak English and are markedly better at it.
+    /// </summary>
+    public string TranscriptionLanguage { get; set; } = "en";
 }

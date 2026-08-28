@@ -14,7 +14,10 @@ sits in a meeting room, records the whole meeting to a single MP3, and lets
 one operator mark who is speaking by clicking a tile or pressing a number
 key. Output is that MP3 plus a Markdown file of speaker segments and
 timestamp gaps, meant to be handed to an LLM to produce a per-speaker
-transcript. Offline only — no accounts, no network calls, no cloud sync.
+transcript. The full edition can also recognise the speech itself, on the
+same machine, and writes the words into that Markdown under the speaker the
+operator marked. Offline only — no accounts, no network calls, no cloud
+sync; speech recognition included, see "Speech recognition" below.
 
 The full spec is [`docs/recorder-design-guide.html`](docs/recorder-design-guide.html)
 (an archived copy of the `claude.ai/design` doc this was built from — read
@@ -63,6 +66,9 @@ interaction rule.
 - **NAudio** for capture (`WaveInEvent`) and **NAudio.Lame** for MP3
   encoding (bundles `libmp3lame.dll`, x86+x64, as content — no ffmpeg
   process, no runtime download, matching the design guide's build note).
+- **Whisper.net 1.8.1** for speech recognition, in the Full edition only.
+  See "Speech recognition" below for why it is not faster-whisper and why
+  the version is pinned.
 - Layout: `src/MeetingRecorder/`
   - `Theme/` — `Tokens.xaml` (the section 02 colour tokens), `Controls.xaml`
     (button/input/scrollbar skins), `Palette.cs` (the same tokens for the
@@ -77,10 +83,18 @@ interaction rule.
     repair operations — pure logic, no UI dependency), `MarkJournal`
     (`marks.jsonl`, fsync per operation), `SessionStore` / `PresetStore`
     (the on-disk session folder and presets), `MarkdownExporter` (the output
-    contract), `GlobalHotkeyService`, `PowerKeepAwake`, `KeyMap`, `DiskInfo`.
+    contract), `GlobalHotkeyService`, `PowerKeepAwake`, `KeyMap`, `DiskInfo`,
+    `BuildProfile` (which edition this exe is).
+    Speech recognition adds `WhisperRuntime` (finds the natives and the model
+    file) and `TranscriptionService` (the pipeline) — **the only two files
+    that name a Whisper.net type, and the only two Lite removes from
+    compilation**; plus `TranscriptStore` (`transcript.jsonl`, fsync per
+    segment), `TranscriptMapper` (segment → mark attribution) and
+    `TranscriptionSettingsStore`, all of which build into both editions so
+    Lite can still open and export a session Full recorded.
   - `Controls/` — `TitleBar`, `WaveformView`, `BlockLaneView`, `SpeakerTile`,
-    `RosterRow`, `MarksDock`, `Dropdown`. Custom-drawn where the guide asks
-    for something WPF has no primitive for.
+    `RosterRow`, `MarksDock`, `Dropdown`, `TranscriptView`. Custom-drawn
+    where the guide asks for something WPF has no primitive for.
   - `Views/` — `ShellWindow` (shared 40px chrome), `LibraryWindow` (S1),
     `SetupWindow` (S2), `RecordingWindow` (S3+S4), `ExportWindow` (S5),
     `ToastWindow` (the mini bar), `Ui` (small layout builders). UI is built
@@ -123,6 +137,10 @@ Implemented, with the guide section each answers to:
 - **11 non-negotiables** — `marks.jsonl` fsync'd per operation, sleep and
   display-off inhibited, device-unplugged fallback that keeps recording and
   writes a note into the Markdown, timestamps from the audio sample count.
+- **Speech recognition (Full edition)** — beyond the guide: an opt-in
+  on-device whisper pass, a three-line live transcript strip under the
+  minimap, and a `## Transcript` section mapping the words onto the marks.
+  See "Speech recognition" and "Editions" below.
 
 **Deliberately deferred — confirm scope with the user before building:**
 
@@ -137,8 +155,98 @@ Implemented, with the guide section each answers to:
   the pre-existing loopback *device* option is kept, and the true format is
   written into `audio_format` rather than assumed.
 - **WinUI 3 / MSIX** — see the tech stack note above. Not a gap to close.
+- **Bundling a speech model, or downloading one.** Not a gap either: the
+  model is deliberately the operator's own local file. See "Speech
+  recognition" below.
 - **Shared or multi-machine libraries**, calendar/Teams integration,
   diarisation, audio editing — all out of scope per section 11.
+
+## Speech recognition
+
+An addition on top of the design guide, not something it asked for. It is
+governed by one rule that outranks every other consideration here — section
+11's **recording never stops for any reason**. Transcription is a passive tap
+on the audio: the capture thread only copies samples into a queue, everything
+expensive or fallible happens on a worker thread that cannot reach the
+encoder, and every failure path (no model, no runtime, a whisper crash, a
+lost GPU, falling behind) degrades to "no text" plus a sentence in the UI.
+**If a change here could ever make a recording fail, it is the wrong
+change.**
+
+### Whisper.net, not faster-whisper
+
+The request that started this named
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper). It is a Python
+library on CTranslate2, so shipping it means either embedding a Python
+runtime plus cuDNN (~2–3 GB) or telling users to `pip install` first — and
+that collides head-on with this repo's one-exe, no-setup requirement.
+**Whisper.net** runs the same Whisper models through whisper.cpp, in-process,
+as a NuGet, and survives `PublishSingleFile`. This was confirmed with the
+user before building; don't "fix" it back to faster-whisper.
+
+**Pinned to 1.8.1 deliberately.** On `net8.0`, 1.8.1 has *zero* managed
+dependencies; 1.9.x pulls `Microsoft.Extensions.AI.Abstractions` and
+`System.Text.Json 10` into what is otherwise a two-package app. Every API
+this code uses is identical in both. Upgrade only with a reason.
+
+### The model is always a local file
+
+There is no download button, no cache fetch and no first-run step. The
+operator supplies a ggml `.bin`, which VoxMark finds in
+`Documents\VoxMark\Models\` or via Browse. This is not laziness — the target
+machine sits behind a filtering corporate proxy, and it is also the only way
+"offline only — no network calls" stays literally true. **Do not add a
+downloader.**
+
+### Finding the natives is the fragile part
+
+`Whisper.net`'s loader does not P/Invoke by name: it walks the disk for
+`<root>/runtimes/win-x64/whisper.dll` and loads it by path. In a single-file
+exe those files are wherever the host extracted them, so `WhisperRuntime.Probe`
+searches candidate roots (`NATIVE_DLL_SEARCH_DIRECTORIES` is the one that
+matters for a published exe) and hands the answer over via
+`RuntimeOptions.LibraryPath`. That is also why the Full build sets
+`IncludeAllContentForSelfExtract` — it is what keeps the `runtimes/...` tree
+intact instead of flattening it. If transcription ever stops finding its
+engine, start there, and remember `Documents\VoxMark\whisper-runtime\` is the
+manual override.
+
+### Timestamps
+
+Segment times must land on the same timebase as the marks or the whole
+feature is decorative. Audio is consumed strictly in order and nothing is
+dropped silently, so a chunk's start is exactly
+`consumedSourceFrames / sourceSampleRate` — the same "count the samples that
+were written" rule `AudioCaptureService` uses for file time. Chunks are
+resampled to 16 kHz one at a time rather than as a continuous stream, which
+costs a few ms of filter warm-up per boundary (inaudible to a decoder) and
+buys exactly this property. Don't replace it with a streaming resampler
+without solving the drift it reintroduces.
+
+## Editions — Lite and Full
+
+Two exes from this one source tree, selected by an MSBuild property:
+
+```powershell
+-p:Edition=Full   # default: whisper.cpp + CUDA, ~250 MB, compressed
+-p:Edition=Lite   # no speech recognition, ~70 MB, today's recorder exactly
+```
+
+Lite defines `VOXMARK_LITE`, references none of the Whisper packages, and
+`<Compile Remove>`s `WhisperRuntime.cs` and `TranscriptionService.cs`. Its
+Setup screen has no transcription row at all — **compiled out, not greyed
+out**, which is the user's explicit choice: an operator who only ever marks
+speakers should see the screen they already know.
+
+Keep the `#if !VOXMARK_LITE` surface as small as it is now — three regions in
+`SetupWindow`, three in `RecordingWindow`, and the two removed files. Anything
+that does not name a Whisper.net type belongs in both editions, so that a
+session recorded on a Full machine still opens, exports and reads correctly
+in Lite.
+
+`AssemblyName` is `VoxMark` in both, so crash logs, session folders and the
+Markdown `tool:` field do not fork; CI renames the Lite output. The running
+app names its own edition through `BuildProfile`, on the library screen.
 
 ## Output contract (read section 10 before touching `MarkdownExporter`)
 
@@ -150,22 +258,49 @@ Don't reshape this without re-reading section 10 and confirming — the
 guide itself flags the format as *its* proposal, not a settled requirement,
 so if it needs to change, that's a real decision, not a refactor.
 
+The transcript is **additive to that contract, never a change to it**. The
+segments table and the `## Gaps` table are untouched; recognised speech goes
+into a new `## Transcript` section after them, and the two front-matter keys
+(`transcription`, `transcript_coverage`) are appended after the section 10
+keys rather than woven among them. A session recorded without transcription
+must still produce byte-for-byte the file it always did — that is the
+property to check first if you touch `MarkdownExporter`.
+
+Attribution rule, stated in the output itself: a segment goes to the mark it
+overlaps most. Whisper's boundaries follow its own decoding rather than the
+speaker changes, so a segment can straddle a handover; splitting it would
+need per-word timings this pipeline does not produce reliably, and inventing
+a split point would fabricate attribution the operator never made.
+
 ## Windows build & packaging
 
 **The deliverable for Windows users is one `.exe` file, self-contained, no
-setup.** This is a project requirement, not a default to optimize away.
+setup.** This is a project requirement, not a default to optimize away — and
+it holds for *both* editions.
 
 ```powershell
 dotnet publish src/MeetingRecorder/MeetingRecorder.csproj `
   -c Release -r win-x64 --self-contained true `
+  -p:Edition=Full `
   -p:PublishSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true `
-  -o publish
+  -o publish/full
+
+dotnet publish src/MeetingRecorder/MeetingRecorder.csproj `
+  -c Release -r win-x64 --self-contained true `
+  -p:Edition=Lite `
+  -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  -o publish/lite
 ```
 
 This is already encoded in `MeetingRecorder.csproj` (`SelfContained`,
-`PublishSingleFile`, `RuntimeIdentifiers=win-x64`) and in the CI workflow —
-don't remove those properties to "simplify" the project file.
+`PublishSingleFile`, `RuntimeIdentifiers=win-x64`, and for Full
+`IncludeAllContentForSelfExtract` + `EnableCompressionInSingleFile`) and in
+the CI workflow — don't remove those properties to "simplify" the project
+file. The workflow also asserts that neither publish directory contains
+anything but the exe, because a loose DLL beside it is exactly how this
+requirement gets broken by accident.
 
 **Prerequisites, precisely:**
 
@@ -183,10 +318,10 @@ don't remove those properties to "simplify" the project file.
   users **"More info" → "Run anyway."** Don't add registry tweaks or
   unblock scripts asking users to lower their system's security settings.
 
-CI (`.github/workflows/build-windows-exe.yml`) publishes this exe on every
-push to `main` and uploads it as a build artifact; pushing a `v*` tag also
-attaches it to a GitHub Release. If you change build flags, make sure that
-workflow still produces a working single-file exe — it's the actual proof
+CI (`.github/workflows/build-windows-exe.yml`) publishes both exes on every
+push to `main` and uploads them as build artifacts; pushing a `v*` tag also
+attaches both to a GitHub Release. If you change build flags, make sure that
+workflow still produces two working single-file exes — it's the actual proof
 the packaging requirement is met, since it can't be verified locally here.
 
 ## Repo conventions

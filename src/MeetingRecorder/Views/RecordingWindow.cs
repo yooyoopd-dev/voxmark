@@ -28,6 +28,19 @@ namespace MeetingRecorder.Views;
 /// </summary>
 public sealed class RecordingWindow : ShellWindow
 {
+    /// <summary>
+    /// The height budget. Adding the transcript strip does not steal from the
+    /// timecode, the tiles' legibility or the Stop button — it is paid for
+    /// out of the live waveform's slack and the collapsed dock's chrome, and
+    /// the numbers live together here so that stays checkable.
+    /// </summary>
+    private const double TallWaveHeight = 132;
+    private const double CompactWaveHeight = 108;
+    private const double ExpandedWaveHeight = 72;
+    private const double CollapsedDockHeight = 232;
+    private const double CompactCollapsedDockHeight = 150;
+    private const double ExpandedDockHeight = 380;
+
     private readonly RecordingSession _session;
     private readonly AudioCaptureService _capture;
     private readonly MarkingEngine _marking;
@@ -36,6 +49,13 @@ public sealed class RecordingWindow : ShellWindow
     private readonly ToastWindow _toast = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private readonly ConcurrentQueue<WaveSlice> _slices = new();
+
+    /// <summary>
+    /// Recognised lines handed over from the worker thread and drained on the
+    /// UI timer — the same arrangement as <see cref="_slices"/>, and for the
+    /// same reason: nothing in the UI gets to sit on a background thread.
+    /// </summary>
+    private readonly ConcurrentQueue<TranscriptSegment> _recognised = new();
     private readonly Dictionary<int, SpeakerTile> _tiles = new();
 
     private readonly Ellipse _recDot;
@@ -63,6 +83,31 @@ public sealed class RecordingWindow : ShellWindow
     private readonly TextBlock _noticeText;
     private readonly MarksDock _dock;
     private readonly Border _dockHost;
+
+    /// <summary>
+    /// The live transcript strip and its header. Present only when speech
+    /// recognition is actually running: an empty strip would cost the speaker
+    /// grid height for nothing.
+    /// </summary>
+    private readonly TranscriptView? _transcriptView;
+    private readonly TextBlock? _transcriptStatus;
+    private readonly UIElement? _transcriptRow;
+    private readonly TranscriptStore? _transcriptStore;
+#if !VOXMARK_LITE
+    private readonly TranscriptionService? _transcription;
+#endif
+
+    /// <summary>True when the transcript strip is on screen and the layout paid for it.</summary>
+    private readonly bool _compactLayout;
+
+#if !VOXMARK_LITE
+    /// <summary>
+    /// Holds a one-off transcription message on screen for a few seconds. The
+    /// tick rewrites that status ten times a second, so without this a
+    /// "couldn't recognise that chunk" would be gone before it was read.
+    /// </summary>
+    private DateTime _transcriptNoticeUntil = DateTime.MinValue;
+#endif
 
     private bool _awaitingStopConfirm;
     private bool _stopping;
@@ -116,7 +161,9 @@ public sealed class RecordingWindow : ShellWindow
 
         _waveform = new WaveformView();
         _waveWell = Ui.Well(_waveform, new Thickness(0), 8);
-        _waveWell.Height = 132;
+        // Set for real in BuildBody, once it is known whether the transcript
+        // strip is taking a slice of this screen's height.
+        _waveWell.Height = TallWaveHeight;
 
         _minimap = new BlockLaneView { AllowTwoRows = session.Options.AllowOverlappingMarks, IsInteractive = false };
         _minimapClock = Ui.Mono("00:00:00 / whole session", 11, Palette.TextMutedBrush);
@@ -141,8 +188,35 @@ public sealed class RecordingWindow : ShellWindow
         _noticeBanner.Margin = new Thickness(20, 12, 20, 0);
 
         _dock = new MarksDock(_marking, _session);
-        _dockHost = new Border { Child = _dock, MaxHeight = 232 };
+        _dockHost = new Border { Child = _dock };
         _dock.LayoutChanged += OnDockLayoutChanged;
+
+#if !VOXMARK_LITE
+        // Built before the body, because whether it starts at all decides how
+        // much height the waveform, the dock and the tiles get.
+        if (session.Options.TranscriptionEnabled)
+        {
+            _transcription = new TranscriptionService(session.Options);
+            _transcriptView = new TranscriptView();
+            _transcriptStatus = Ui.Text("starting…", 11, Palette.TextMutedBrush);
+            // Anything long enough to need more room than this belongs in the
+            // notice banner, which is where the real failures already go.
+            _transcriptStatus.MaxWidth = 200;
+            _transcriptRow = BuildTranscriptRow();
+            try
+            {
+                _transcriptStore = new TranscriptStore(session.TranscriptPath);
+            }
+            catch (Exception)
+            {
+                // Losing the journal costs the text after a crash, not the
+                // text on screen and certainly not the recording.
+            }
+        }
+#endif
+
+        _compactLayout = _transcriptRow is not null;
+        _dockHost.MaxHeight = _compactLayout ? CompactCollapsedDockHeight : CollapsedDockHeight;
 
         SetBody(BuildBody());
         BuildTiles();
@@ -232,6 +306,7 @@ public sealed class RecordingWindow : ShellWindow
         top.Children.Add(headerRule);
         top.Children.Add(WavePanel());
         top.Children.Add(minimapRow);
+        if (_transcriptRow is not null) top.Children.Add(_transcriptRow);
         top.Children.Add(speakersHeader);
         top.Children.Add(_addStrip);
 
@@ -246,8 +321,24 @@ public sealed class RecordingWindow : ShellWindow
 
     private UIElement WavePanel()
     {
-        _waveWell.Margin = new Thickness(20, 14, 20, 0);
+        _waveWell.Height = _compactLayout ? CompactWaveHeight : TallWaveHeight;
+        _waveWell.Margin = new Thickness(20, _compactLayout ? 10 : 14, 20, 0);
         return _waveWell;
+    }
+
+    /// <summary>
+    /// The transcript strip and its header. Recognition runs a few seconds
+    /// behind the room by nature, so the header says so rather than letting
+    /// the lag read as a fault.
+    /// </summary>
+    private UIElement BuildTranscriptRow()
+    {
+        var row = Ui.Columns(1,
+            Fixed(Ui.Section("Transcript"), 64),
+            _transcriptView!,
+            PadLeft(_transcriptStatus!, 10));
+        row.Margin = new Thickness(20, 8, 20, 0);
+        return row;
     }
 
     private static FrameworkElement Fixed(FrameworkElement element, double width)
@@ -334,7 +425,7 @@ public sealed class RecordingWindow : ShellWindow
 
         foreach (var speaker in _session.Speakers)
         {
-            var tile = new SpeakerTile(speaker, density) { Margin = new Thickness(5) };
+            var tile = new SpeakerTile(speaker, density, _compactLayout) { Margin = new Thickness(5) };
             tile.Tapped += slot => ToggleSpeaker(slot, viaHotkey: false);
             _tileGrid.Children.Add(tile);
             _tiles[speaker.SlotIndex] = tile;
@@ -344,7 +435,7 @@ public sealed class RecordingWindow : ShellWindow
         {
             var add = new Border
             {
-                Height = SpeakerTile.HeightFor(density),
+                Height = SpeakerTile.HeightFor(density, _compactLayout),
                 CornerRadius = new CornerRadius(8),
                 BorderBrush = Palette.AccentEdgeBrush,
                 BorderThickness = new Thickness(1),
@@ -389,6 +480,7 @@ public sealed class RecordingWindow : ShellWindow
         _session.AudioFormatDescription = _capture.FormatDescription;
         if (!string.IsNullOrEmpty(_capture.DeviceName)) _session.InputDeviceName = _capture.DeviceName;
         _inputName.Text = _session.InputDeviceName;
+        StartTranscription();
         SessionStore.Save(_session);
 
         // Sleep and display-off are inhibited for the session duration.
@@ -410,6 +502,65 @@ public sealed class RecordingWindow : ShellWindow
         _timer.Start();
         Tick();
     }
+
+    /// <summary>
+    /// Bring speech recognition up beside the recorder. Everything here is
+    /// allowed to fail: recognition is a passive tap, and a meeting that
+    /// records without a transcript is a far better outcome than one that
+    /// does not record at all (section 11).
+    /// </summary>
+    private void StartTranscription()
+    {
+#if !VOXMARK_LITE
+        if (_transcription is null || _transcriptView is null || _transcriptStatus is null) return;
+
+        _transcription.SegmentRecognised += OnSegmentRecognised;
+        _transcription.StatusChanged += OnTranscriptionStatus;
+
+        var problem = _transcription.Start(_capture.CurrentFormat);
+        if (problem is not null)
+        {
+            // Named in the banner where the operator will see it, exactly as
+            // a refused global hotkey is, rather than failing quietly — and
+            // the strip says it too, so the empty space is explained rather
+            // than looking like recognition that never got going.
+            ShowNotice(problem + " The meeting is still recording.");
+            _transcriptView.ShowUnavailable("No transcript for this meeting — see the notice above.");
+            _transcriptStatus.Text = "unavailable";
+            _transcriptNoticeUntil = DateTime.MaxValue;
+            return;
+        }
+
+        _session.TranscriptionDescription = _transcription.Description;
+        _capture.PcmAvailable += _transcription.Push;
+#endif
+    }
+
+#if !VOXMARK_LITE
+    /// <summary>
+    /// A recognised line, arriving on the worker thread. The speaker colour
+    /// is resolved here from the marks as they stand right now, which is what
+    /// makes the strip show the same attribution the Markdown will make.
+    /// </summary>
+    private void OnSegmentRecognised(TranscriptSegment segment)
+    {
+        // Journalled on this thread so a crash cannot lose it, then queued
+        // for the UI. The journal is the durable record; the queue is a view.
+        _transcriptStore?.Append(segment);
+        _recognised.Enqueue(segment);
+    }
+
+    private void OnTranscriptionStatus(string status)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (_transcriptStatus is null) return;
+            _transcriptStatus.Text = status;
+            _transcriptStatus.Foreground = Palette.TextMutedBrush;
+            _transcriptNoticeUntil = DateTime.UtcNow.AddSeconds(6);
+        });
+    }
+#endif
 
     private void OnSlices(WaveSlice[] slices)
     {
@@ -490,6 +641,8 @@ public sealed class RecordingWindow : ShellWindow
         _dock.UpdateLive(elapsed);
 
         UpdateTiles(elapsed);
+        DrainRecognised();
+        UpdateTranscriptStatus();
 
         // The rec dot pulses while recording and holds steady while paused,
         // so a glance at the corner is enough to tell the two apart.
@@ -502,6 +655,46 @@ public sealed class RecordingWindow : ShellWindow
             _lastSavedAt = elapsed;
             PersistSession(elapsed);
         }
+    }
+
+    /// <summary>
+    /// Move recognised lines onto the session and into the strip. The speaker
+    /// colour is resolved against the marks as they stand right now, so the
+    /// strip shows the attribution the Markdown will actually make.
+    /// </summary>
+    private void DrainRecognised()
+    {
+        while (_recognised.TryDequeue(out var segment))
+        {
+            _session.Transcript.Add(segment);
+
+            var mark = TranscriptMapper.MarkFor(segment, _marking.Marks);
+            _transcriptView?.Append(segment, mark is not null ? Palette.ForSlot(mark.SpeakerSlot) : (Color?)null);
+        }
+    }
+
+    /// <summary>
+    /// How far recognition is running behind the room. Whisper decodes in
+    /// chunks, so a handful of seconds is normal and is labelled as such;
+    /// only a backlog that keeps growing is worth an operator's attention.
+    /// </summary>
+    private void UpdateTranscriptStatus()
+    {
+#if !VOXMARK_LITE
+        if (_transcription is null || _transcriptStatus is null || !_transcription.IsRunning) return;
+        if (DateTime.UtcNow < _transcriptNoticeUntil) return;
+
+        var backlog = _transcription.BacklogSeconds;
+        var dropped = _transcription.DroppedSeconds;
+
+        _transcriptStatus.Text = dropped >= 1
+            ? "⚠ " + dropped.ToString("0") + " s not transcribed"
+            : backlog > 25
+                ? backlog.ToString("0") + " s behind"
+                : _transcription.Description;
+
+        _transcriptStatus.Foreground = dropped >= 1 ? Palette.WarnBrush : Palette.TextMutedBrush;
+#endif
     }
 
     private IReadOnlyList<WaveformBoundary> BuildBoundaries(double elapsed)
@@ -579,10 +772,15 @@ public sealed class RecordingWindow : ShellWindow
     private void OnDockLayoutChanged()
     {
         // Expanding takes space from the grid's spare height and from the
-        // live waveform (132px → 72px), never from the timecode, the tiles
-        // or the Stop button.
-        _waveWell.Height = _dock.IsExpanded ? 72 : 132;
-        _dockHost.MaxHeight = _dock.IsExpanded ? 380 : 232;
+        // live waveform, never from the timecode, the tiles or the Stop
+        // button. The heights themselves are the budget at the top of this
+        // file, which the transcript strip also draws on.
+        _waveWell.Height = _dock.IsExpanded
+            ? ExpandedWaveHeight
+            : _compactLayout ? CompactWaveHeight : TallWaveHeight;
+        _dockHost.MaxHeight = _dock.IsExpanded
+            ? ExpandedDockHeight
+            : _compactLayout ? CompactCollapsedDockHeight : CollapsedDockHeight;
     }
 
     // -------------------------------------------------------------- marking
@@ -881,6 +1079,8 @@ public sealed class RecordingWindow : ShellWindow
         _session.DroppedBufferCount = _capture.DroppedBuffers;
         _session.EndedAt = DateTimeOffset.Now;
 
+        StopTranscription();
+
         _capture.Stop();
         PowerKeepAwake.End();
         _hotkeys.Dispose();
@@ -895,6 +1095,35 @@ public sealed class RecordingWindow : ShellWindow
         Closing -= OnClosing;
         try { _toast.Close(); } catch (Exception) { }
         Close();
+    }
+
+    /// <summary>
+    /// Let recognition finish what it has queued, then let it go. The wait is
+    /// bounded because this is the Stop path: the operator pressing Stop must
+    /// never be left watching a spinner while a GPU catches up, and anything
+    /// unfinished is still complete in the MP3.
+    /// </summary>
+    private void StopTranscription()
+    {
+#if !VOXMARK_LITE
+        if (_transcription is not null)
+        {
+            _capture.PcmAvailable -= _transcription.Push;
+            _transcription.StopAndFlush(TimeSpan.FromSeconds(8));
+            _transcription.SegmentRecognised -= OnSegmentRecognised;
+            _transcription.StatusChanged -= OnTranscriptionStatus;
+
+            // The timer is already stopped by now, so the last chunks the
+            // flush produced are still sitting in the queue.
+            DrainRecognised();
+
+            _session.TranscriptionDroppedSeconds = _transcription.DroppedSeconds;
+            _session.Transcript = _session.Transcript.OrderBy(t => t.StartSeconds).ToList();
+
+            _transcription.Dispose();
+        }
+#endif
+        _transcriptStore?.Dispose();
     }
 
     private void OnClosing(object? sender, CancelEventArgs e)

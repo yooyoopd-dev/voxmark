@@ -16,7 +16,7 @@ namespace MeetingRecorder.Services;
 /// </summary>
 public static class MarkdownExporter
 {
-    public const string ToolVersion = "VoxMark 1.1";
+    public const string ToolVersion = "VoxMark 1.2";
 
     /// <summary>The Markdown for a whole, unsplit session.</summary>
     public static string Build(RecordingSession session)
@@ -71,6 +71,10 @@ public static class MarkdownExporter
                           .ToList()
             : session.Gaps;
 
+        var segments = split
+            ? session.Transcript.Where(t => part.Covers(t.StartSeconds, t.EndSeconds)).ToList()
+            : session.Transcript;
+
         sb.Append("---\n");
         sb.Append("title: ").Append(Yaml(session.Title)).Append('\n');
         sb.Append("date: ").Append(session.StartedAt.ToString("yyyy-MM-ddTHH:mm:sszzz")).Append('\n');
@@ -107,6 +111,20 @@ public static class MarkdownExporter
         }
 
         sb.Append("unmarked_duration: ").Append(Timestamp(gaps.Sum(g => g.Duration))).Append('\n');
+
+        // Appended after the section 10 keys rather than woven among them, so
+        // a reader that knows only the original contract sees it unchanged.
+        // Absent entirely when nothing was recognised, which is what keeps a
+        // Lite-recorded session byte-identical to what it always was.
+        if (segments.Count > 0)
+        {
+            sb.Append("transcription: ").Append(Yaml(session.TranscriptionDescription.Length > 0
+                ? "whisper " + session.TranscriptionDescription
+                : "whisper")).Append('\n');
+            sb.Append("transcript_coverage: ")
+              .Append(Timestamp(TranscriptMapper.Coverage(segments))).Append('\n');
+        }
+
         sb.Append("tool: ").Append(ToolVersion).Append('\n');
         sb.Append("---\n\n");
 
@@ -150,6 +168,8 @@ public static class MarkdownExporter
               .Append(" |\n");
         }
 
+        AppendTranscript(sb, session, marks, segments, numbers);
+
         sb.Append("\n## Notes\n\n");
         if (split)
         {
@@ -175,6 +195,27 @@ public static class MarkdownExporter
               .Append(session.PauseCount == 1 ? " time" : " times")
               .Append("; the paused time is absent from both the audio and this table.\n");
         }
+        if (segments.Count > 0)
+        {
+            sb.Append("- Speech was recognised on this machine by whisper");
+            if (session.TranscriptionDescription.Length > 0)
+            {
+                sb.Append(" (").Append(session.TranscriptionDescription).Append(')');
+            }
+            sb.Append("; the words are the recogniser's, the speaker attribution is the operator's.\n");
+            sb.Append("- A transcript segment is attributed to the mark it overlaps most. Segment\n");
+            sb.Append("  boundaries follow the recogniser rather than the speaker changes, so one that\n");
+            sb.Append("  straddles a handover is given whole to whoever holds more of it.\n");
+
+            if (session.TranscriptionDroppedSeconds >= 1)
+            {
+                sb.Append("- Recognition fell behind and ")
+                  .Append(Timestamp(session.TranscriptionDroppedSeconds))
+                  .Append(" of audio was never transcribed; that time is complete in the MP3 " +
+                          "and can be re-transcribed from it.\n");
+            }
+        }
+
         sb.Append("- Mark starts are shifted ")
           .Append(session.Options.MarkStartOffsetSeconds.ToString("0.#"))
           .Append(" s earlier than the operator's key press.\n");
@@ -205,6 +246,53 @@ public static class MarkdownExporter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The recognised words, grouped under the speaker they were attributed
+    /// to. Additive to the section 10 contract rather than a change to it:
+    /// the segments table and the Gaps table above are untouched, so a reader
+    /// that only knows the original format loses nothing, and one that reads
+    /// this gets the transcript already split by speaker.
+    ///
+    /// Nothing is written at all when no speech was recognised, so a session
+    /// recorded without transcription produces exactly the file it used to.
+    /// </summary>
+    private static void AppendTranscript(StringBuilder sb, RecordingSession session,
+                                         IReadOnlyList<Mark> marks, IReadOnlyList<TranscriptSegment> segments,
+                                         IReadOnlyDictionary<long, int> numbers)
+    {
+        var blocks = TranscriptMapper.Blocks(segments, marks);
+        if (blocks.Count == 0) return;
+
+        sb.Append("\n## Transcript\n\n");
+        sb.Append("Recognised speech in chronological order, grouped by the speaker mark it\n");
+        sb.Append("falls in. Times are on the same timebase as the table above. Text under\n");
+        sb.Append("\"unmarked\" was spoken while no speaker was marked — transcribe it, but\n");
+        sb.Append("attribute it with care.\n\n");
+
+        foreach (var block in blocks)
+        {
+            var text = block.Text;
+            if (text.Length == 0) continue;
+
+            sb.Append("### ");
+            if (block.Mark is { } mark)
+            {
+                var speaker = session.SpeakerForSlot(mark.SpeakerSlot);
+                sb.Append(numbers.TryGetValue(mark.Id, out var number) ? number : 0)
+                  .Append(" · ").Append(speaker?.Id ?? "S?")
+                  .Append(" · ").Append(speaker?.Name ?? "Unknown");
+            }
+            else
+            {
+                sb.Append("— · unmarked");
+            }
+
+            sb.Append(" — ").Append(Timestamp(block.StartSeconds))
+              .Append(" → ").Append(Timestamp(block.EndSeconds)).Append("\n\n");
+            sb.Append(text).Append("\n\n");
+        }
     }
 
     /// <summary>

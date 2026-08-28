@@ -35,7 +35,19 @@ public enum MarkBoundary
 /// </summary>
 public sealed class MarksDock : Border
 {
-    private const int CollapsedRowCount = 3;
+    /// <summary>
+    /// Two rows collapsed, not three. The dock's collapsed job is the
+    /// last-few-seconds repair — "I pressed that a beat late" — and two rows
+    /// cover it; the third was reference, not reach, and the transcript strip
+    /// above needs that height more. Expanding still shows everything.
+    /// </summary>
+    private const int CollapsedRowCount = 2;
+
+    /// <summary>Collapsed chrome is trimmed everywhere it can be without crowding the row.</summary>
+    private static readonly Thickness CollapsedHeaderMargin = new(20, 8, 20, 6);
+    private static readonly Thickness ExpandedHeaderMargin = new(20, 12, 20, 10);
+    private static readonly Thickness CollapsedRowsMargin = new(20, 0, 20, 8);
+    private static readonly Thickness ExpandedRowsMargin = new(20, 0, 20, 14);
 
     private readonly MarkingEngine _engine;
     private readonly RecordingSession _session;
@@ -47,6 +59,8 @@ public sealed class MarksDock : Border
     private readonly ScrollViewer _scroller;
     private readonly BlockLaneView _lane;
     private readonly Border _laneHost;
+    private readonly Grid _header;
+    private readonly Border _rowsHolder;
     private readonly Border _toast;
     private readonly TextBlock _toastText;
     private readonly Button _toastAction;
@@ -80,7 +94,7 @@ public sealed class MarksDock : Border
         };
         _laneHost = Ui.Well(_lane, new Thickness(0), 6);
         _laneHost.Height = 34;
-        _laneHost.Margin = new Thickness(20, 12, 20, 0);
+        _laneHost.Margin = new Thickness(20, 10, 20, 0);
         _laneHost.Visibility = Visibility.Collapsed;
 
         _scroller = new ScrollViewer
@@ -101,19 +115,19 @@ public sealed class MarksDock : Border
         _toast.Visibility = Visibility.Collapsed;
         _toastTimer.Tick += (_, _) => HideToast();
 
-        var header = Ui.Columns(2, Pad(_heading, 0, 12), _subheading, Ui.Filler(), _filterChips, _expandButton);
-        header.Margin = new Thickness(20, 12, 20, 10);
+        _header = Ui.Columns(2, Pad(_heading, 0, 12), _subheading, Ui.Filler(), _filterChips, _expandButton);
+        _header.Margin = CollapsedHeaderMargin;
 
         var body = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(header, Dock.Top);
+        DockPanel.SetDock(_header, Dock.Top);
         DockPanel.SetDock(_laneHost, Dock.Top);
         DockPanel.SetDock(_toast, Dock.Bottom);
-        body.Children.Add(header);
+        body.Children.Add(_header);
         body.Children.Add(_laneHost);
         body.Children.Add(_toast);
 
-        var rowsHolder = new Border { Margin = new Thickness(20, 0, 20, 14), Child = _scroller };
-        body.Children.Add(rowsHolder);
+        _rowsHolder = new Border { Margin = CollapsedRowsMargin, Child = _scroller };
+        body.Children.Add(_rowsHolder);
 
         Child = body;
 
@@ -141,6 +155,8 @@ public sealed class MarksDock : Border
         _laneHost.Visibility = _expanded ? Visibility.Visible : Visibility.Collapsed;
         _filterChips.Visibility = _expanded ? Visibility.Visible : Visibility.Collapsed;
         _expandButton.Content = _expanded ? "Collapse ⌄" : "Expand ⌃";
+        _header.Margin = _expanded ? ExpandedHeaderMargin : CollapsedHeaderMargin;
+        _rowsHolder.Margin = _expanded ? ExpandedRowsMargin : CollapsedRowsMargin;
         if (!_expanded) _editingId = null;
         Refresh();
         LayoutChanged?.Invoke();
@@ -362,8 +378,8 @@ public sealed class MarksDock : Border
         {
             Background = Palette.SurfaceBrush,
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(12, 9, 12, 9),
-            Margin = new Thickness(0, 0, 0, 6),
+            Padding = _expanded ? new Thickness(12, 9, 12, 9) : new Thickness(12, 6, 12, 6),
+            Margin = new Thickness(0, 0, 0, _expanded ? 6 : 4),
             BorderThickness = new Thickness(selected ? 1.5 : 1),
             // A red hairline is the suspect flag; selection wins over it so
             // the operator can always see what they are about to edit.

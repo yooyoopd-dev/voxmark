@@ -42,6 +42,9 @@ public sealed class MeetingPlan
             MarkStartOffsetSeconds = Options.MarkStartOffsetSeconds,
             Mp3BitrateKbps = Options.Mp3BitrateKbps,
             SplitMinutes = Options.SplitMinutes,
+            TranscriptionEnabled = Options.TranscriptionEnabled,
+            WhisperModelPath = Options.WhisperModelPath,
+            TranscriptionLanguage = Options.TranscriptionLanguage,
         },
     };
 }

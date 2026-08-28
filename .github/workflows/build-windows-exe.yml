@@ -19,7 +19,7 @@ jobs:
     # which OS the published EXE targets.
     runs-on: windows-latest
 
-    # softprops/action-gh-release attaches VoxMark.exe to the tag's Release
+    # softprops/action-gh-release attaches the EXEs to the tag's Release
     # via the REST API, which the default GITHUB_TOKEN can't do under a
     # repo/org read-only default — it needs contents: write explicitly, or
     # every tag push publishes an asset-less Release ("Resource not
@@ -35,21 +35,64 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Publish self-contained single-file EXE
+      # Two editions from the same tree — see CLAUDE.md "Editions". Lite is
+      # built first and is the cheap one: if a change broke the build itself
+      # rather than the speech-recognition packaging, it fails here in a
+      # minute instead of after downloading the CUDA runtime.
+      - name: Publish Lite EXE (no speech recognition)
         run: >
           dotnet publish src/MeetingRecorder/MeetingRecorder.csproj
           -c Release -r win-x64 --self-contained true
+          -p:Edition=Lite
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish
+          -o publish/lite
 
-      - name: Upload build artifact
+      # AssemblyName is VoxMark in both editions, so the two builds share a
+      # crash-log name and a Markdown "tool:" field; only the shipped file
+      # name distinguishes them.
+      - name: Name the Lite EXE
+        shell: pwsh
+        run: Rename-Item publish/lite/VoxMark.exe VoxMark-Lite.exe
+
+      - name: Publish Full EXE (whisper.cpp + CUDA)
+        run: >
+          dotnet publish src/MeetingRecorder/MeetingRecorder.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:Edition=Full
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/full
+
+      # Neither EXE is allowed to ship a loose DLL beside it — that is the
+      # whole packaging requirement, and the CUDA runtime is exactly the kind
+      # of dependency that would quietly break it.
+      - name: Check both EXEs are genuinely single files
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($edition in @("lite", "full")) {
+              # .pdb is the separate symbol file every Release publish emits;
+              # it is not shipped and not needed to run the app.
+              $stray = Get-ChildItem "publish/$edition" -Recurse -File |
+                       Where-Object { $_.Extension -notin ".exe", ".pdb" }
+              if ($stray) {
+                  Write-Host "::error::$edition publish is not a single file:"
+                  $stray | ForEach-Object { Write-Host "  $($_.FullName)" }
+                  $failed = $true
+              }
+          }
+          Get-ChildItem publish -Recurse -Filter *.exe |
+              ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
+          if ($failed) { exit 1 }
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: VoxMark-win-x64
-          # AssemblyName is VoxMark, so this is the file dotnet publish
-          # actually produces.
-          path: publish/VoxMark.exe
+          path: |
+            publish/full/VoxMark.exe
+            publish/lite/VoxMark-Lite.exe
 
       # Two ways in: pushing a v* tag, or running this workflow by hand with a
       # version. The manual route exists because creating a tag needs push
@@ -63,4 +106,6 @@ jobs:
           tag_name: ${{ inputs.version || github.ref_name }}
           target_commitish: ${{ github.sha }}
           name: ${{ inputs.version || github.ref_name }}
-          files: publish/VoxMark.exe
+          files: |
+            publish/full/VoxMark.exe
+            publish/lite/VoxMark-Lite.exe
