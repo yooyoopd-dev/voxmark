@@ -75,6 +75,10 @@ public static class SessionStore
             // The folder can be moved by the user; trust where the file
             // actually is over what was recorded when it was written.
             session.SessionFolder = folder;
+            // The transcript lives in its own journal rather than in here, so
+            // a summary file stays a summary; rehydrate it so every caller
+            // sees a whole session regardless of where the pieces are kept.
+            session.Transcript = TranscriptStore.Replay(session.TranscriptPath);
             return session;
         }
         catch (Exception)

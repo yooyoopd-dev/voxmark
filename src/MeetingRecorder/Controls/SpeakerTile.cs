@@ -49,7 +49,7 @@ public sealed class SpeakerTile : Border
 
     private bool _isOpen;
 
-    public SpeakerTile(Speaker speaker, TileDensity density)
+    public SpeakerTile(Speaker speaker, TileDensity density, bool compact = false)
     {
         _speaker = speaker;
         _density = density;
@@ -60,7 +60,7 @@ public sealed class SpeakerTile : Border
         BorderBrush = Palette.HairlineBrush;
         Background = Palette.SurfaceBrush;
         Cursor = Cursors.Hand;
-        Height = HeightFor(density);
+        Height = HeightFor(density, compact);
         // Section 02: tiles never fall below 72px tall or 160px wide.
         MinWidth = 160;
         MinHeight = 72;
@@ -310,12 +310,36 @@ public sealed class SpeakerTile : Border
         _ => 4,
     };
 
-    public static double HeightFor(TileDensity density) => density switch
+    /// <summary>
+    /// Tile height for a density band. <paramref name="compact"/> is the
+    /// recording screen giving up roughly a line of tile height to the live
+    /// transcript strip — the grid stays the same shape, the tiles just lose
+    /// slack. Section 02's 72px floor is never crossed, so even the densest
+    /// compact tile is still a comfortable target in a dim room.
+    /// </summary>
+    public static double HeightFor(TileDensity density, bool compact = false)
     {
-        TileDensity.Roomy => 148,
-        TileDensity.Default => 116,
-        TileDensity.Tight => 96,
-        _ => 76,
+        var height = density switch
+        {
+            TileDensity.Roomy => 148.0,
+            TileDensity.Default => 116.0,
+            TileDensity.Tight => 96.0,
+            _ => 76.0,
+        };
+
+        return compact ? Math.Max(72, height - CompactReductionFor(density)) : height;
+    }
+
+    /// <summary>
+    /// Roomy tiles have the most slack to give and the dense ones almost
+    /// none, so the reduction tapers rather than being flat.
+    /// </summary>
+    private static double CompactReductionFor(TileDensity density) => density switch
+    {
+        TileDensity.Roomy => 16,
+        TileDensity.Default => 12,
+        TileDensity.Tight => 8,
+        _ => 4,
     };
 
     private static double NameSizeFor(TileDensity density) => density switch

@@ -199,6 +199,32 @@ public sealed class ExportWindow : ShellWindow
         {
             _summary.Children.Add(Ui.Text("No marks were made in this session.", 13, Palette.TextMutedBrush));
         }
+
+        if (_session.Transcript.Count > 0)
+        {
+            var words = TranscriptMapper.WordCount(_session.Transcript);
+            var coverage = TranscriptMapper.Coverage(_session.Transcript);
+            var line = Ui.Text(
+                words.ToString("N0") + " words recognised, covering " + Ui.Clock(coverage) +
+                " of the recording" +
+                (_session.TranscriptionDescription.Length > 0
+                    ? " · " + _session.TranscriptionDescription
+                    : ""),
+                12.5, Palette.AccentTextBrush);
+            line.Margin = new Thickness(0, 10, 0, 0);
+            _summary.Children.Add(line);
+
+            if (_session.TranscriptionDroppedSeconds >= 1)
+            {
+                var behind = Ui.Wrap(
+                    "Recognition fell " + Ui.Clock(_session.TranscriptionDroppedSeconds) +
+                    " behind and that stretch has no text. The audio itself is complete — " +
+                    "it can be transcribed from the MP3.",
+                    11.5, Palette.WarnBrush);
+                behind.Margin = new Thickness(0, 6, 0, 0);
+                _summary.Children.Add(behind);
+            }
+        }
     }
 
     private static UIElement SummaryRow(string name, Brush colour, double seconds, double total,

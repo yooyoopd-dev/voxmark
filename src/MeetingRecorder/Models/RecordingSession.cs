@@ -62,6 +62,25 @@ public sealed class RecordingSession
     /// <summary>Extra lines appended to the Markdown's "## Notes" — device fallbacks, mostly.</summary>
     public List<string> Notes { get; set; } = new();
 
+    /// <summary>
+    /// What speech recognition ran, verbatim for the Markdown's
+    /// <c>transcription</c> field — "small.en / en / CUDA". Empty when none
+    /// ran, which is what makes the whole field disappear from the output.
+    /// </summary>
+    public string TranscriptionDescription { get; set; } = "";
+
+    /// <summary>Seconds of audio the transcriber could not keep up with. Surfaced, never swallowed.</summary>
+    public double TranscriptionDroppedSeconds { get; set; }
+
+    /// <summary>
+    /// Recognised speech, chronological. Deliberately *not* in session.json:
+    /// an hour of dialogue would swamp a file that exists to be a summary.
+    /// It lives in transcript.jsonl and <see cref="Services.SessionStore"/>
+    /// rehydrates it on load, which is also what makes an interrupted
+    /// meeting recoverable with its words rather than just its timings.
+    /// </summary>
+    [JsonIgnore] public List<TranscriptSegment> Transcript { get; set; } = new();
+
     /// <summary>False until the export pass has written the Markdown; drives the library's recovery row.</summary>
     public bool Completed { get; set; }
 
@@ -69,6 +88,7 @@ public sealed class RecordingSession
     [JsonIgnore] public string MarkdownPath => Path.Combine(SessionFolder, Path.ChangeExtension(AudioFileName, ".md"));
     [JsonIgnore] public string SessionJsonPath => Path.Combine(SessionFolder, "session.json");
     [JsonIgnore] public string JournalPath => Path.Combine(SessionFolder, "marks.jsonl");
+    [JsonIgnore] public string TranscriptPath => Path.Combine(SessionFolder, "transcript.jsonl");
 
     /// <summary>Speakers that appear in the Markdown roster — absent ones keep their slot but are left out.</summary>
     [JsonIgnore] public IEnumerable<Speaker> PresentSpeakers => Speakers.Where(s => !s.IsAbsent);

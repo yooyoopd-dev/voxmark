@@ -34,7 +34,7 @@ public sealed class LibraryWindow : ShellWindow
 
         var heading = Ui.Vertical(2,
             Ui.Text("Sessions", 24),
-            Ui.Text("stored locally · nothing leaves this machine", 12.5, Palette.TextMutedBrush));
+            Ui.Text(BuildProfile.Subtitle, 12.5, Palette.TextMutedBrush));
 
         var newMeeting = Ui.MakeButton("＋ New meeting", null, "AccentButton", (_, _) => StartNewMeeting());
         newMeeting.VerticalAlignment = VerticalAlignment.Bottom;

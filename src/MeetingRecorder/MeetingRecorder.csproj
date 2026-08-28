@@ -12,7 +12,7 @@
 
     <!-- Single-file, self-contained Windows build. No .NET runtime install
          is required on the machine that runs the resulting .exe. See
-         CLAUDE.md "Windows Build & Packaging" for the exact publish command
+         CLAUDE.md "Windows build & packaging" for the exact publish command
          and why this project uses WPF (not the design guide's WinUI3/MSIX
          suggestion) to keep that promise. -->
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
@@ -20,6 +20,36 @@
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- Two editions from one source tree — see CLAUDE.md "Editions".
+           Full  (default)  speech recognition, whisper.cpp + CUDA, ~250 MB
+           Lite             today's recorder, no speech recognition, ~70 MB
+         Anything but "Lite" means Full, so a typo can never silently ship a
+         build with the feature quietly missing. -->
+    <Edition Condition="'$(Edition)' == ''">Full</Edition>
+    <IsLiteEdition>false</IsLiteEdition>
+    <IsLiteEdition Condition="'$(Edition)' == 'Lite'">true</IsLiteEdition>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsLiteEdition)' == 'true'">
+    <!-- Compiles the transcription UI and its wiring out entirely rather than
+         disabling it: a Lite operator's Setup screen is the one they already
+         know, with no row for a feature this exe cannot perform. -->
+    <DefineConstants>$(DefineConstants);VOXMARK_LITE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsLiteEdition)' != 'true'">
+    <!-- whisper.cpp's loader does not P/Invoke by name: it walks the disk for
+         "<base>/runtimes/win-x64/whisper.dll" and loads it by path. The
+         default single-file mode leaves content files loose beside the exe,
+         which would break the one-file promise, and bundling them as native
+         libraries flattens the very directory the loader is looking for.
+         Extracting all content keeps that tree intact inside the extraction
+         directory, which is where Services/WhisperRuntime.cs probes. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <!-- Roughly halves the download. Worth the slower first launch only at
+         the CUDA payload's size, so Lite does not pay for it. -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +63,32 @@
          encoding needs no ffmpeg process and no runtime download — matches
          the design guide's "bundled LAME" build note. -->
     <PackageReference Include="NAudio.Lame" Version="2.1.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsLiteEdition)' != 'true'">
+    <!-- Speech recognition: whisper.cpp through Whisper.net. 1.8.1 is the
+         last version with *no* managed dependencies on net8.0 (1.9.x pulls
+         Microsoft.Extensions.AI.Abstractions and System.Text.Json 10), which
+         keeps this exe's assembly set exactly as small as it was. Model
+         weights are never bundled and never downloaded — the operator
+         supplies a local ggml .bin, see Services/WhisperRuntime.cs. -->
+    <PackageReference Include="Whisper.net" Version="1.8.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />
+    <!-- The .Windows package directly, not the Whisper.net.Runtime.Cuda
+         meta-package: that one also depends on the Linux runtime, which
+         would drag another ~140 MB through restore for files this exe can
+         never load. CUDA is tried first and falls back to the CPU runtime
+         above on a machine with no usable NVIDIA device. -->
+    <PackageReference Include="Whisper.net.Runtime.Cuda.Windows" Version="1.8.1" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsLiteEdition)' == 'true'">
+    <!-- The only two files that name a Whisper.net type. Everything else
+         about the transcript — the model, the journal, the mark mapping, the
+         Markdown section — compiles into Lite too, so a session recorded on
+         a Full machine still opens and exports correctly here. -->
+    <Compile Remove="Services\WhisperRuntime.cs" />
+    <Compile Remove="Services\TranscriptionService.cs" />
   </ItemGroup>
 
 </Project>

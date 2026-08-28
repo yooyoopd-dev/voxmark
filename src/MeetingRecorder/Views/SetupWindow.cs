@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -43,6 +44,11 @@ public sealed class SetupWindow : ShellWindow
     private readonly CheckBox _overlapToggle;
     private readonly Dropdown _offset;
     private readonly Dropdown _split;
+#if !VOXMARK_LITE
+    private readonly CheckBox _transcribeToggle;
+    private readonly TextBlock _modelName;
+    private readonly TextBlock _transcribeStatus;
+#endif
 
     private List<Preset> _presets = new();
     private RosterRow? _capturingRow;
@@ -125,6 +131,27 @@ public sealed class SetupWindow : ShellWindow
             if (value is int minutes) _options.SplitMinutes = minutes;
         };
 
+#if !VOXMARK_LITE
+        // Remembered across meetings: choosing a model is setup, and being
+        // asked for it again before every meeting would be a chore rather
+        // than a decision.
+        WhisperRuntime.EnsureModelsFolder();
+        var transcription = TranscriptionSettingsStore.Load();
+        _options.WhisperModelPath = transcription.ModelPath;
+        _options.TranscriptionLanguage = transcription.Language;
+        _transcriptionPreferred = transcription.Enabled;
+
+        _modelName = Ui.Mono("—", 12, Palette.TextBodyBrush);
+        _modelName.MaxWidth = 220;
+        _modelName.TextTrimming = TextTrimming.CharacterEllipsis;
+        _transcribeStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
+
+        _transcribeToggle = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
+        if (TryFindResource("ToggleSwitch") is Style transcribeStyle) _transcribeToggle.Style = transcribeStyle;
+        _transcribeToggle.Checked += (_, _) => SetTranscription(true);
+        _transcribeToggle.Unchecked += (_, _) => SetTranscription(false);
+#endif
+
         if (plan is not null)
         {
             _planId = plan.Id;
@@ -132,6 +159,13 @@ public sealed class SetupWindow : ShellWindow
             _options.MarkStartOffsetSeconds = plan.Options.MarkStartOffsetSeconds;
             _options.Mp3BitrateKbps = plan.Options.Mp3BitrateKbps;
             _options.SplitMinutes = plan.Options.SplitMinutes;
+            // Whether to transcribe is a decision about *this meeting*, so a
+            // plan carries it. Which model file to use is a fact about *this
+            // machine*, so it stays with the machine — a plan written on
+            // another PC would otherwise point at a path that does not exist.
+#if !VOXMARK_LITE
+            _transcriptionPreferred = plan.Options.TranscriptionEnabled;
+#endif
             _roster.AddRange(plan.Speakers.Select(sp => sp.Clone()));
         }
 
@@ -149,6 +183,9 @@ public sealed class SetupWindow : ShellWindow
         LoadPresets();
         SeedRoster();
         UpdateFolderPreview();
+#if !VOXMARK_LITE
+        RefreshTranscriptionState();
+#endif
 
         _meter.LevelChanged += OnLevel;
         _title.TextChanged += (_, _) => UpdateFolderPreview();
@@ -318,20 +355,47 @@ public sealed class SetupWindow : ShellWindow
             Ui.Filler(),
             _split);
 
-        var optionsCard = Ui.Card(Ui.Vertical(0,
+        var optionRows = new List<UIElement>
+        {
             Pad(format, 11),
             Ui.Rule(),
             Pad(overlap, 11),
             Ui.Rule(),
             Pad(offsetRow, 11),
             Ui.Rule(),
-            Pad(splitRow, 11)), new Thickness(13, 2, 13, 2));
+            Pad(splitRow, 11),
+        };
+
+#if !VOXMARK_LITE
+        var browse = Ui.MakeButton("Browse", null, "ChipButton", (_, _) => BrowseForModel());
+        browse.Margin = new Thickness(8, 0, 0, 0);
+
+        optionRows.Add(Ui.Rule());
+        optionRows.Add(Pad(Ui.Columns(1,
+            Ui.Text("Live transcription", 13.5, Palette.TextBrush),
+            Ui.Filler(),
+            _transcribeToggle), 11));
+        optionRows.Add(Pad(Ui.Columns(1,
+            Ui.Text("Speech model", 12.5, Palette.TextDimBrush),
+            Ui.Filler(),
+            _modelName,
+            browse), 4));
+        optionRows.Add(Pad(_transcribeStatus, 4));
+#endif
+
+        var optionsCard = Ui.Card(Ui.Vertical(0, optionRows.ToArray()), new Thickness(13, 2, 13, 2));
 
         var offsetNote = Ui.Wrap(
             "A human presses the key after the speaker has already begun, so every mark start is shifted back " +
             "by the offset automatically; the raw press time is kept in the log so it can be re-tuned later. " +
             "Splitting rolls to a new MP3 on the chosen interval and writes a matching Markdown for each one — " +
-            "timestamps keep counting from the first file, so they mean the same thing in every chunk.",
+            "timestamps keep counting from the first file, so they mean the same thing in every chunk."
+#if !VOXMARK_LITE
+            + " Live transcription recognises speech on this PC and maps the words onto your speaker " +
+            "marks in the exported Markdown. The model is a file you supply — VoxMark never downloads " +
+            "one and makes no network calls."
+#endif
+            ,
             11.5, Palette.TextMutedBrush);
         offsetNote.Margin = new Thickness(2, 9, 2, 0);
 
@@ -869,6 +933,121 @@ public sealed class SetupWindow : ShellWindow
         UpdateFolderPreview();
     }
 
+#if !VOXMARK_LITE
+    /// <summary>
+    /// What the operator wants, which is not always what is possible. Kept
+    /// apart from <c>_options.TranscriptionEnabled</c> — which is what will
+    /// actually happen — so that a model file that is temporarily missing
+    /// does not quietly erase the preference. Put the file back and the
+    /// toggle comes back on by itself.
+    /// </summary>
+    private bool _transcriptionPreferred;
+
+    /// <summary>Guards the programmatic IsChecked writes in <see cref="RefreshTranscriptionState"/>.</summary>
+    private bool _syncingTranscription;
+
+    private void SetTranscription(bool wanted)
+    {
+        if (_syncingTranscription) return;
+
+        _transcriptionPreferred = wanted;
+        RememberTranscription();
+        RefreshTranscriptionState();
+    }
+
+    /// <summary>Whether a meeting started right now would actually get a transcript.</summary>
+    private bool CanTranscribe(out string reason)
+    {
+        if (WhisperRuntime.Probe() is { } runtimeProblem)
+        {
+            reason = runtimeProblem;
+            return false;
+        }
+
+        var model = WhisperRuntime.ResolveModel(_options.WhisperModelPath);
+        reason = model.Problem ?? model.Warning ?? "";
+        return model.IsUsable;
+    }
+
+    /// <summary>
+    /// Reconcile the preference with what this machine can do, and say which
+    /// of the two the operator is looking at. This is also where
+    /// <c>_options.TranscriptionEnabled</c> gets its value, so the session
+    /// that starts can never promise a transcript this screen did not.
+    /// </summary>
+    private void RefreshTranscriptionState()
+    {
+        var model = WhisperRuntime.ResolveModel(_options.WhisperModelPath);
+        var ready = CanTranscribe(out var reason);
+
+        _options.TranscriptionEnabled = _transcriptionPreferred && ready;
+
+        _modelName.Text = model.Path.Length > 0 ? model.Name : "none found";
+        _modelName.Foreground = ready ? Palette.AccentTextBrush : Palette.TextMutedBrush;
+
+        _syncingTranscription = true;
+        try
+        {
+            _transcribeToggle.IsChecked = _transcriptionPreferred;
+        }
+        finally
+        {
+            _syncingTranscription = false;
+        }
+
+        if (!ready)
+        {
+            _transcribeStatus.Text = _transcriptionPreferred
+                ? reason + " Recording will go ahead without a transcript."
+                : reason;
+            _transcribeStatus.Foreground = Palette.WarnBrush;
+            return;
+        }
+
+        _transcribeStatus.Text = _transcriptionPreferred
+            ? "Ready — words are recognised on this PC while you mark, and land in the Markdown "
+              + "under the speaker you marked."
+            : "A model is ready. Turn this on to transcribe while you record.";
+        _transcribeStatus.Foreground = Palette.TextMutedBrush;
+    }
+
+    /// <summary>Pick a model file by hand, for anyone not using the Models folder.</summary>
+    private void BrowseForModel()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Choose a whisper speech model",
+            Filter = "Whisper ggml model (*.bin)|*.bin|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+
+        try
+        {
+            if (Directory.Exists(WhisperRuntime.ModelsFolder))
+            {
+                dialog.InitialDirectory = WhisperRuntime.ModelsFolder;
+            }
+        }
+        catch (Exception)
+        {
+            // An unreadable folder is not worth failing the dialog over.
+        }
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        _options.WhisperModelPath = dialog.FileName;
+        RememberTranscription();
+        RefreshTranscriptionState();
+    }
+
+    private void RememberTranscription() => TranscriptionSettingsStore.Save(new TranscriptionSettingsStore.Settings
+    {
+        ModelPath = _options.WhisperModelPath,
+        Enabled = _transcriptionPreferred,
+        Language = _options.TranscriptionLanguage,
+    });
+#endif
+
     /// <summary>Save the whole meeting — title, time, room, roster, options — for later.</summary>
     private void SaveSetup()
     {
@@ -885,6 +1064,13 @@ public sealed class SetupWindow : ShellWindow
                 MarkStartOffsetSeconds = _options.MarkStartOffsetSeconds,
                 Mp3BitrateKbps = _options.Mp3BitrateKbps,
                 SplitMinutes = _options.SplitMinutes,
+                // The preference, not what this machine can do today: a plan
+                // opened on a PC with the model installed should transcribe.
+#if VOXMARK_LITE
+                TranscriptionEnabled = _options.TranscriptionEnabled,
+#else
+                TranscriptionEnabled = _transcriptionPreferred,
+#endif
             },
         };
         // Re-saving an opened plan updates it in place instead of piling up

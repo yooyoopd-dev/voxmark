@@ -71,6 +71,14 @@ public sealed class AudioCaptureService : IDisposable
     /// <summary>Verbatim <c>audio_format</c> for the Markdown front matter.</summary>
     public string FormatDescription { get; private set; } = "mp3 / 128 kbps / 44100 Hz / mono";
 
+    /// <summary>
+    /// The format the device is actually delivering, which is not always the
+    /// one that was asked for. Anything that consumes
+    /// <see cref="PcmAvailable"/> needs it to make sense of the bytes.
+    /// </summary>
+    public WaveFormat CurrentFormat => _writerFormat ??
+        new WaveFormat(SampleRate, BitsPerSample, Channels);
+
     /// <summary>Elapsed seconds of audio actually written to the MP3 so far.</summary>
     public double ElapsedSeconds => _bytesWritten / _bytesPerSecond;
 
@@ -91,6 +99,18 @@ public sealed class AudioCaptureService : IDisposable
 
     /// <summary>Fires when the recorder rolled over to a new MP3.</summary>
     public event Action<AudioPart>? PartRolled;
+
+    /// <summary>
+    /// The raw capture buffer, in the device's own format, for anything that
+    /// wants to listen in — today that is speech recognition.
+    ///
+    /// A tap, not a stage: it is raised after the audio is safely in the
+    /// encoder, and a subscriber that throws is swallowed here, because
+    /// nothing downstream of capture is allowed to stop the recording
+    /// (section 11). Silent while paused, like the waveform, since paused
+    /// time is not in the file.
+    /// </summary>
+    public event Action<byte[], int, WaveFormat>? PcmAvailable;
 
     /// <summary>Every MP3 written so far, in order.</summary>
     public IReadOnlyList<AudioPart> Parts => _parts;
@@ -251,6 +271,18 @@ public sealed class AudioCaptureService : IDisposable
         }
 
         if (slices.Length > 0) SlicesAvailable?.Invoke(slices);
+
+        if (PcmAvailable is { } tap)
+        {
+            try
+            {
+                tap(e.Buffer, e.BytesRecorded, format);
+            }
+            catch (Exception)
+            {
+                // A listener's problem is never the recording's problem.
+            }
+        }
 
         if (_splitBytes > 0 && _bytesWritten - _partStartBytes >= _splitBytes) RollPart();
     }
