@@ -49,6 +49,7 @@ folder:
 ```
 Documents\VoxMark\
   presets.json                          ← saved rosters
+  plans.json                            ← meetings set up in advance
   Sessions\
     2026-03-12_weekly-product-review\
       weekly-product-review_2026-03-12.mp3   ← the audio
@@ -83,13 +84,46 @@ session inside the app only unlists it — VoxMark never deletes your audio.
    | `Ctrl+E` | expand the marks dock to repair marks live |
    | `Ctrl+N` | add a speaker mid-meeting |
    | `↑` `↓` `Enter` | move and open a mark in the dock |
-   | `←` `→` (`Shift` for 0.1 s) | nudge the selected boundary 0.5 s |
+   | `←` `→` (`Shift` for 0.5 s) | trim the open mark's start by 0.1 s |
    | `Esc` | stop — asks once, inline |
+
+   The arrow keys are the quick fix for pressing a beat late: they move the
+   open mark's start, and the speaker tile and the waveform flag both show
+   that time as it moves. The handover boundary travels with it, so a nudge
+   never opens a gap. (Once a row is selected in the expanded dock, the
+   arrows edit that row instead.)
 
    The dock flags its own suspects: marks under 2 seconds, and sub-0.3-second
    gaps between two different speakers. Recording never stops while you edit.
 4. **Stop** — writes the MP3 and the Markdown into the session folder shown
    above.
+
+### Setting a meeting up in advance
+
+The Date & time field is the meeting's own time, not a clock — type when the
+meeting is. **Save setup** (Ctrl+S) stores the whole thing (title, time, room,
+roster, options), and it appears at the top of the library as *Ready to
+record*. Walk into the room, pick it, press Start.
+
+### Splitting a long meeting
+
+Under Recording options, **Split recording** rolls to a new MP3 every 10, 15,
+30 or 60 minutes instead of writing one large file — useful when whatever
+consumes the recording has an upload or context limit. Each MP3 gets its own
+Markdown, and **timestamps keep counting from the first file** rather than
+restarting, so a time means the same thing in every chunk. Each file says
+where it sits:
+
+```yaml
+audio_file: weekly-product-review_2026-03-12_part02.mp3
+audio_part: 2 of 4
+audio_part_start: 00:15:00.000
+timebase: offset from the start of part 1, continuing across every part;
+          subtract audio_part_start to seek inside audio_file
+```
+
+A turn that runs across a boundary appears in both files, cut at the
+boundary, so no speech is lost.
 
 ## Build from source
 
@@ -115,18 +149,23 @@ deliverable.
 ## Releasing a new version
 
 [`.github/workflows/build-windows-exe.yml`](.github/workflows/build-windows-exe.yml)
-builds the exe on every push to `main` and on every pull request. Pushing a
-`v*` tag additionally attaches `VoxMark.exe` to that tag's GitHub Release,
-which is what makes it downloadable without a login:
+builds the exe on every push to `main` and on every pull request. Publishing a
+release attaches `VoxMark.exe` to it, which is what makes the build
+downloadable without a login. There are two ways to trigger that:
+
+**From the Actions tab** — open *Build Windows EXE*, click **Run workflow**,
+and type the version (`v1.1.0`). The workflow creates the tag and the release
+itself, so this needs no local git and no push rights.
+
+**By pushing a tag:**
 
 ```bash
-git tag -a v1.0.1 -m "VoxMark 1.0.1"
-git push origin v1.0.1
+git tag -a v1.1.0 -m "VoxMark 1.1.0"
+git push origin v1.1.0
 ```
 
-(Or use **Releases → Draft a new release** on GitHub and create the tag
-there.) Once the workflow finishes, the exe appears under that release's
-Assets.
+Either way the exe appears under that release's Assets once the run
+finishes.
 
 ## Design and scope
 
