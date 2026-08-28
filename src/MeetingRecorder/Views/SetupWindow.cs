@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using MeetingRecorder.Controls;
 using MeetingRecorder.Models;
 using MeetingRecorder.Services;
@@ -48,6 +49,9 @@ public sealed class SetupWindow : ShellWindow
     private RosterRow? _dragSource;
     private double _peak;
     private string _planId = "";
+    private readonly DispatcherTimer _meterWatchdog = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    private DateTime _lastSignalAt = DateTime.MinValue;
+    private bool _retriedMeter;
 
     /// <summary>
     /// A blank setup, or one seeded from a meeting the operator saved
@@ -55,9 +59,9 @@ public sealed class SetupWindow : ShellWindow
     /// that can still be edited before Start.
     /// </summary>
     public SetupWindow(MeetingPlan? plan = null)
-        : base(plan is null ? "New meeting — setup" : "Setup — " + plan.Title, 1180, 800)
+        : base(plan is null ? "New meeting — setup" : "Setup — " + plan.Title, 1320, 820)
     {
-        MinWidth = 980;
+        MinWidth = 1060;
         MinHeight = 700;
 
         _title = Field(plan?.Title ?? "Weekly Product Review", 15);
@@ -111,7 +115,9 @@ public sealed class SetupWindow : ShellWindow
         _split = new Dropdown("ChipButton") { MinHeight = 26 };
         _split.SetItems(new (string, object)[]
         {
-            ("One file", 0), ("Every 10 min", 10), ("Every 15 min", 15),
+            ("One file", 0),
+            ("Every 1 min", 1), ("Every 2 min", 2), ("Every 5 min", 5),
+            ("Every 10 min", 10), ("Every 15 min", 15),
             ("Every 30 min", 30), ("Every 60 min", 60),
         });
         _split.SelectionChanged += value =>
@@ -153,7 +159,12 @@ public sealed class SetupWindow : ShellWindow
             _title.Focus();
             _title.SelectAll();
         };
-        Closed += (_, _) => _meter.Dispose();
+        _meterWatchdog.Tick += (_, _) => CheckMeter();
+        Closed += (_, _) =>
+        {
+            _meterWatchdog.Stop();
+            _meter.Dispose();
+        };
         PreviewKeyDown += OnPreviewKeyDown;
     }
 
@@ -349,11 +360,16 @@ public sealed class SetupWindow : ShellWindow
         back.MinHeight = 40;
         back.Margin = new Thickness(0, 0, 14, 0);
 
-        var row = Ui.Columns(3,
+        // The folder path is the star column and trims with an ellipsis, so a
+        // long path eats its own slack instead of pushing the buttons out of
+        // the window. The buttons stay Auto and always keep their full width.
+        _folderPreview.TextTrimming = TextTrimming.CharacterEllipsis;
+        _folderPreview.Margin = new Thickness(10, 0, 20, 0);
+
+        var row = Ui.Columns(2,
             back,
             Ui.Text("Session folder", 12.5, Palette.TextMutedBrush),
-            Pad(_folderPreview, 0, 10),
-            Ui.Filler(),
+            _folderPreview,
             saveSetup,
             savePreset,
             start);
@@ -394,7 +410,11 @@ public sealed class SetupWindow : ShellWindow
 
     private void SeedRoster()
     {
+        // A plan arrives with its roster already in _roster, but nothing has
+        // drawn it yet — without this the rows only appeared once something
+        // else forced a rebuild, which looked like the plan had lost them.
         if (_roster.Count == 0) AddSpeaker();
+        else RebuildRoster();
     }
 
     private void AddSpeaker(string name = "", string role = "")
@@ -585,32 +605,99 @@ public sealed class SetupWindow : ShellWindow
         }
 
         _device.SetItems(_devices.Select(d => (d.Name, (object)d.Id)));
-        _device.Select(_devices[0].Id);
+
+        // Default to whatever Windows itself considers the input, not merely
+        // the first device it happens to enumerate.
+        var preferred = _devices.Any(d => d.Id == AudioDevices.DefaultDeviceNumber)
+            ? AudioDevices.DefaultDeviceNumber
+            : _devices[0].Id;
+        _device.Select(preferred);
     }
 
     private void OnDeviceChanged() => StartMeter();
 
-    private void StartMeter()
+    private void StartMeter(bool isRetry = false)
     {
         if (_device.SelectedValue is not int deviceId) return;
+
+        _meterWatchdog.Stop();
+        _peak = 0;
+        _lastSignalAt = DateTime.MinValue;
+        if (!isRetry) _retriedMeter = false;
+
         try
         {
             _meter.Start(deviceId);
-            _levelStatus.Text = "Say something to test the level";
+            _levelStatus.Text = "Opening the device…";
             _levelStatus.Foreground = Palette.TextMutedBrush;
+            _meterWatchdog.Start();
         }
         catch (Exception ex)
         {
             _levelStatus.Text = "Could not open this device — " + ex.Message;
             _levelStatus.Foreground = Palette.RecBrush;
         }
+
         UpdateDisk();
+    }
+
+    /// <summary>
+    /// "No signal" has two causes that look identical on a meter and need
+    /// different actions, so they are reported differently.
+    ///
+    /// No buffers at all means the device opened but Windows is not handing
+    /// over audio — the wrong input, or one held by another app, or blocked
+    /// by microphone privacy. Some drivers also take several seconds to start
+    /// delivering, so the meter reopens the device once before saying so.
+    ///
+    /// Buffers that are all silence means the device is fine and the audio is
+    /// not: muted, gain at zero, or nobody talking.
+    /// </summary>
+    private void CheckMeter()
+    {
+        if (!_meter.IsRunning) return;
+
+        var openFor = (DateTime.UtcNow - _meter.StartedAt).TotalSeconds;
+
+        if (_meter.BuffersReceived == 0)
+        {
+            if (openFor > 3 && !_retriedMeter)
+            {
+                _retriedMeter = true;
+                _levelStatus.Text = "No audio yet — reopening the device…";
+                _levelStatus.Foreground = Palette.WarnBrush;
+                StartMeter(isRetry: true);
+                return;
+            }
+
+            if (openFor > 6)
+            {
+                _levelStatus.Text = "Device opened but is sending no audio — try another input, " +
+                                    "or check Settings → Privacy → Microphone";
+                _levelStatus.Foreground = Palette.RecBrush;
+            }
+            else if (openFor > 1)
+            {
+                _levelStatus.Text = "Waiting for the device to start…";
+                _levelStatus.Foreground = Palette.TextMutedBrush;
+            }
+            return;
+        }
+
+        // Buffers are arriving; decay the meter here too so it falls back to
+        // zero when the room goes quiet instead of freezing at the last peak.
+        _peak *= 0.86;
+        var width = _levelTrack.ActualWidth;
+        if (width > 0) _levelFill.Width = Math.Clamp(Normalise(_peak), 0, 1) * width;
+        UpdateLevelStatus();
     }
 
     private void OnLevel(double level)
     {
         // Decay slowly so the bar reads like a meter rather than a strobe.
         _peak = Math.Max(level, _peak * 0.86);
+        if (level > 0.01) _lastSignalAt = DateTime.UtcNow;
+
         Dispatcher.InvokeAsync(() =>
         {
             var width = _levelTrack.ActualWidth;
@@ -632,8 +719,16 @@ public sealed class SetupWindow : ShellWindow
     {
         if (_peak < 0.005)
         {
-            _levelStatus.Text = "No signal — say something to test";
-            _levelStatus.Foreground = Palette.TextMutedBrush;
+            var silentFor = _lastSignalAt == DateTime.MinValue
+                ? (DateTime.UtcNow - _meter.StartedAt).TotalSeconds
+                : (DateTime.UtcNow - _lastSignalAt).TotalSeconds;
+
+            // The device is delivering, so this is silence rather than a dead
+            // input — say which, and only nag once it has been quiet a while.
+            _levelStatus.Text = silentFor > 8
+                ? "Only silence from " + _meter.FormatDescription + " — is the mic muted?"
+                : "Receiving " + _meter.FormatDescription + " — say something to test";
+            _levelStatus.Foreground = silentFor > 8 ? Palette.WarnBrush : Palette.TextMutedBrush;
         }
         else if (_peak > 0.92)
         {
@@ -739,9 +834,11 @@ public sealed class SetupWindow : ShellWindow
     private void UpdateFolderPreview()
     {
         var title = string.IsNullOrWhiteSpace(_title.Text) ? "New meeting" : _title.Text.Trim();
-        _folderPreview.Text = System.IO.Path.Combine(
+        var folder = System.IO.Path.Combine(
             AppPaths.SessionsRoot,
             ScheduledAt().ToString("yyyy-MM-dd") + "_" + AppPaths.Slugify(title)) + "\\";
+        _folderPreview.Text = folder;
+        _folderPreview.ToolTip = folder;
     }
 
     /// <summary>

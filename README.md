@@ -66,7 +66,9 @@ session inside the app only unlists it — VoxMark never deletes your audio.
 1. **Library** — every past meeting is a folder on this machine. Start a new
    one, or finish exporting a session the app never got to close.
 2. **Setup** — title the meeting, pick the input device and watch the level
-   meter, build the roster. Each speaker gets a marking key (1-9, 0, then
+   meter (it defaults to whatever Windows itself calls the default input, and
+   says plainly whether a quiet meter means silence or a device that is not
+   sending anything), build the roster. Each speaker gets a marking key (1-9, 0, then
    Shift+1/Shift+2) that you can reassign by clicking its key cell; absent
    people keep their slot and colour. Save the roster as a preset to reuse it.
 3. **Record & mark** — press a speaker's key (or click their tile) when they
@@ -107,8 +109,8 @@ record*. Walk into the room, pick it, press Start.
 
 ### Splitting a long meeting
 
-Under Recording options, **Split recording** rolls to a new MP3 every 10, 15,
-30 or 60 minutes instead of writing one large file — useful when whatever
+Under Recording options, **Split recording** rolls to a new MP3 every 1, 2, 5,
+10, 15, 30 or 60 minutes instead of writing one large file — useful when whatever
 consumes the recording has an upload or context limit. Each MP3 gets its own
 Markdown, and **timestamps keep counting from the first file** rather than
 restarting, so a time means the same thing in every chunk. Each file says
