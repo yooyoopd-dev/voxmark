@@ -42,6 +42,18 @@ public sealed class TranscriptView : Border
     private readonly TextBlock _placeholder;
     private readonly Button _jumpToLive;
 
+    /// <summary>
+    /// Each drawn row's segment alongside the timecode label whose colour
+    /// came from it, kept in the same order as <see cref="_lines"/>'
+    /// children. What makes <see cref="RecolorAll"/> possible: a line's
+    /// colour is otherwise baked in once at <see cref="Append"/> time and
+    /// never touched again, which is correct for new lines (resolved against
+    /// the segment's own historical timestamp) but goes stale if the mark it
+    /// was resolved against is later edited — reassigned, nudged, merged,
+    /// undone — in the Marks dock.
+    /// </summary>
+    private readonly List<(TranscriptSegment Segment, TextBlock TimeLabel)> _rows = new();
+
     private bool _following = true;
 
     public TranscriptView()
@@ -122,10 +134,33 @@ public sealed class TranscriptView : Border
         var row = Ui.Columns(1, time, text);
         row.Margin = new Thickness(0, 0, 0, 3);
         _lines.Children.Add(row);
+        _rows.Add((segment, time));
 
-        while (_lines.Children.Count > MaxLines) _lines.Children.RemoveAt(0);
+        while (_lines.Children.Count > MaxLines)
+        {
+            _lines.Children.RemoveAt(0);
+            _rows.RemoveAt(0);
+        }
 
         if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
+    }
+
+    /// <summary>
+    /// Re-resolve every drawn line's timecode colour against the marks as
+    /// they stand right now. Called after a live-repair edit — reassign,
+    /// nudge, merge, split, delete, undo/redo — so a line drawn against a
+    /// mark that has since changed doesn't keep showing the colour it was
+    /// given when it first appeared. Cheap: only the small timecode labels
+    /// repaint, not the lines' layout or text.
+    /// </summary>
+    public void RecolorAll(Func<TranscriptSegment, Color?> resolve)
+    {
+        foreach (var (segment, label) in _rows)
+        {
+            label.Foreground = resolve(segment) is { } colour
+                ? new SolidColorBrush(colour)
+                : Palette.TextFaintBrush;
+        }
     }
 
     /// <summary>
@@ -146,6 +181,7 @@ public sealed class TranscriptView : Border
     public void Clear()
     {
         _lines.Children.Clear();
+        _rows.Clear();
         _scroller.Visibility = Visibility.Collapsed;
         _placeholder.Visibility = Visibility.Visible;
     }

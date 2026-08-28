@@ -71,8 +71,16 @@ public static class MarkdownExporter
                           .ToList()
             : session.Gaps;
 
+        // Clipped into the part's own boundaries the same way marks are
+        // (Clip(mark, part), below) — otherwise a segment whose audio
+        // straddles a part boundary would appear in full in both files'
+        // Markdown, with a displayed time past that file's own end,
+        // contradicting the Notes' own claim that a boundary-crossing turn
+        // is "cut at the boundary."
         var segments = split
-            ? session.Transcript.Where(t => part.Covers(t.StartSeconds, t.EndSeconds)).ToList()
+            ? session.Transcript.Where(t => part.Covers(t.StartSeconds, t.EndSeconds))
+                     .Select(t => ClipSegment(t, part))
+                     .ToList()
             : session.Transcript;
 
         sb.Append("---\n");
@@ -289,8 +297,21 @@ public static class MarkdownExporter
                 sb.Append("— · unmarked");
             }
 
-            sb.Append(" — ").Append(Timestamp(block.StartSeconds))
-              .Append(" → ").Append(Timestamp(block.EndSeconds)).Append("\n\n");
+            // A marked block's header is the mark's own start/end — the same
+            // field the table above prints — so the two sections agree by
+            // construction rather than by two independently-derived numbers
+            // that can drift apart. Whisper's segment boundaries follow its
+            // own decoding, not the speaker changes, so the *words'* actual
+            // audio span (block.StartSeconds/EndSeconds) can legitimately
+            // extend past the mark either way; that's still true and still
+            // the right span for the recognised text, it's just not what
+            // belongs in a header meant to say "this is mark N's turn."
+            // Unmarked blocks have no mark to match, so they keep the
+            // segment-derived span — the only honest source there.
+            var headerStart = block.Mark?.StartSeconds ?? block.StartSeconds;
+            var headerEnd = block.Mark?.EndSeconds ?? block.EndSeconds;
+            sb.Append(" — ").Append(Timestamp(headerStart))
+              .Append(" → ").Append(Timestamp(headerEnd)).Append("\n\n");
             sb.Append(text).Append("\n\n");
         }
     }
@@ -307,6 +328,17 @@ public static class MarkdownExporter
         var clipped = mark.Clone();
         clipped.StartSeconds = Math.Max(mark.StartSeconds, part.StartSeconds);
         clipped.EndSeconds = Math.Min(mark.EndSeconds, part.EndSeconds);
+        return clipped;
+    }
+
+    /// <summary>The transcript-segment equivalent of <see cref="Clip"/>, same shape.</summary>
+    private static TranscriptSegment ClipSegment(TranscriptSegment segment, AudioPart part)
+    {
+        if (segment.StartSeconds >= part.StartSeconds && segment.EndSeconds <= part.EndSeconds) return segment;
+
+        var clipped = segment.Clone();
+        clipped.StartSeconds = Math.Max(segment.StartSeconds, part.StartSeconds);
+        clipped.EndSeconds = Math.Min(segment.EndSeconds, part.EndSeconds);
         return clipped;
     }
 
