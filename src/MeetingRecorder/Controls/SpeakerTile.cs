@@ -40,6 +40,7 @@ public sealed class SpeakerTile : Border
     private readonly TextBlock _name;
     private readonly TextBlock _key;
     private readonly TextBlock _meta;
+    private readonly TextBlock _markTime;
     private readonly TextBlock? _role;
     private readonly Ellipse? _roleDot;
     private readonly Border? _talkTrack;
@@ -102,6 +103,17 @@ public sealed class SpeakerTile : Border
             Foreground = Palette.TextMutedBrush,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
+        };
+
+        // The open mark's start, shown on the tile itself so the operator can
+        // read and correct it (← →) without looking away from the grid.
+        _markTime = new TextBlock
+        {
+            FontFamily = Mono,
+            FontSize = 11,
+            Foreground = Palette.TextMutedBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
         };
 
         var top = new StackPanel { Orientation = Orientation.Horizontal };
@@ -180,8 +192,10 @@ public sealed class SpeakerTile : Border
         stack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         stack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Grid.SetRow(top, 0);
+        Grid.SetRow(_markTime, 1);
         Grid.SetRow(bottom, 2);
         stack.Children.Add(top);
+        stack.Children.Add(_markTime);
         stack.Children.Add(bottom);
         stack.Margin = new Thickness(14, 12, 14, 12);
 
@@ -210,7 +224,8 @@ public sealed class SpeakerTile : Border
     /// Refresh the live state. <paramref name="share"/> is 0..1 of the
     /// session so far, used by the roomy layout's talk-time bar.
     /// </summary>
-    public void Update(bool isOpen, double openSeconds, double talkSeconds, double share)
+    public void Update(bool isOpen, double openSeconds, double talkSeconds, double share,
+                       double markStartSeconds)
     {
         if (isOpen != _isOpen)
         {
@@ -245,17 +260,29 @@ public sealed class SpeakerTile : Border
         {
             _meta.Text = "◉ " + Clock(openSeconds);
             _meta.Foreground = Palette.TextSecondaryBrush;
+            _markTime.Text = "▶ " + Tenths(markStartSeconds);
+            _markTime.Foreground = new SolidColorBrush(_color);
+            _markTime.Visibility = Visibility.Visible;
         }
         else
         {
             _meta.Text = talkSeconds > 0 ? Clock(talkSeconds) : "—";
             _meta.Foreground = Palette.TextMutedBrush;
+            _markTime.Visibility = Visibility.Collapsed;
         }
 
         if (_talkTrack is not null && _talkFill is not null)
         {
             _talkFill.Width = Math.Max(0, Math.Min(1, share)) * _talkTrack.Width;
         }
+    }
+
+    /// <summary>HH:MM:SS.t — tenths, because that is the nudge step.</summary>
+    private static string Tenths(double seconds)
+    {
+        var span = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ((int)span.TotalHours).ToString("00") + ":" + span.Minutes.ToString("00") + ":" +
+               span.Seconds.ToString("00") + "." + (span.Milliseconds / 100).ToString("0");
     }
 
     private static string Clock(double seconds)

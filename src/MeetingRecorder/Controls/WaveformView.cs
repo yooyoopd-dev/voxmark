@@ -1,32 +1,41 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
+using MeetingRecorder.Models;
 using MeetingRecorder.Theme;
 
 namespace MeetingRecorder.Controls;
 
 /// <summary>One speaker-change boundary drawn over the waveform.</summary>
-public readonly record struct WaveformBoundary(double Seconds, Color Color, string Initial);
+public readonly record struct WaveformBoundary(double Seconds, Color Color, string Initial, bool IsOpen);
 
 /// <summary>
 /// The live waveform, design guide section 04: a rolling window of the last
-/// 45 seconds, bars centred on a hairline, the playhead pinned to the right
-/// edge.
+/// 45 seconds with the playhead pinned to the right edge.
 ///
-/// Section 01 borrows Ultraschall's chapter-marker shape for speaker
-/// changes: a 1px line at every mark boundary with the speaker's initial in
-/// a small flag, drawn on top of the waveform so the operator can read
-/// turn-taking at a glance.
+/// It draws a real min/max envelope from ~10 ms slices rather than one bar
+/// per capture buffer, with the RMS core filled in brighter inside it. That
+/// detail is the point: the operator repairs marks by eye against this, so a
+/// pause between words has to be visible as a gap, not averaged away.
+///
+/// Section 01 borrows Ultraschall's chapter-marker shape for speaker changes:
+/// a 1px line at every mark boundary with the speaker's initial in a small
+/// flag, drawn on top so turn-taking reads at a glance. The boundary of the
+/// mark that is still open is drawn heavier, because that is the one the
+/// arrow keys move.
 /// </summary>
 public sealed class WaveformView : FrameworkElement
 {
-    private readonly List<(double Seconds, double Level)> _samples = new();
+    private readonly List<WaveSlice> _slices = new();
     private IReadOnlyList<WaveformBoundary> _boundaries = Array.Empty<WaveformBoundary>();
 
-    private static readonly Brush BarBrush = Palette.TextFaintBrush;
-    private static readonly Brush RecentBarBrush = Palette.TextDimBrush;
-    private static readonly Pen CentreLine = FrozenPen(Color.FromArgb(0x12, 0xE9, 0xE9, 0xED), 1);
-    private static readonly Pen PlayheadPen = FrozenPen(Color.FromArgb(0x80, 0xE9, 0xE9, 0xED), 2);
+    private static readonly Brush PeakBrush = Frozen(Color.FromRgb(0x4C, 0x51, 0x63));
+    private static readonly Brush PeakRecentBrush = Frozen(Color.FromRgb(0x63, 0x68, 0x7D));
+    private static readonly Brush RmsBrush = Frozen(Palette.TextFaint);
+    private static readonly Brush RmsRecentBrush = Frozen(Palette.TextDim);
+    private static readonly Pen CentreLine = FrozenPen(Color.FromArgb(0x14, 0xE9, 0xE9, 0xED), 1);
+    private static readonly Pen GridLine = FrozenPen(Color.FromArgb(0x0C, 0xE9, 0xE9, 0xED), 1);
+    private static readonly Pen PlayheadPen = FrozenPen(Color.FromArgb(0x90, 0xE9, 0xE9, 0xED), 2);
 
     public WaveformView()
     {
@@ -36,31 +45,34 @@ public sealed class WaveformView : FrameworkElement
     /// <summary>Length of the rolling window. 45 s, per the section 04 mockup.</summary>
     public double WindowSeconds { get; set; } = 45;
 
-    public int BarCount { get; set; } = 120;
-
     /// <summary>Current file position; the right edge of the window.</summary>
     public double CurrentSeconds { get; set; }
 
     /// <summary>Dims the trace while paused, so a flat line is never mistaken for silence.</summary>
     public bool IsPaused { get; set; }
 
-    public void Push(double seconds, double level)
+    public void Push(WaveSlice slice)
     {
-        _samples.Add((seconds, Math.Clamp(level, 0, 1)));
+        _slices.Add(slice);
 
         // Keep a little more than one window's worth so a resize never
         // reveals a gap at the left edge.
-        var cutoff = seconds - WindowSeconds * 1.2;
-        if (_samples.Count > 64 && _samples[0].Seconds < cutoff)
+        var cutoff = slice.Seconds - WindowSeconds * 1.2;
+        if (_slices.Count > 512 && _slices[0].Seconds < cutoff)
         {
-            var keepFrom = _samples.FindIndex(s => s.Seconds >= cutoff);
-            if (keepFrom > 0) _samples.RemoveRange(0, keepFrom);
+            var keepFrom = _slices.FindIndex(s => s.Seconds >= cutoff);
+            if (keepFrom > 0) _slices.RemoveRange(0, keepFrom);
         }
+    }
+
+    public void Push(IReadOnlyList<WaveSlice> slices)
+    {
+        foreach (var slice in slices) Push(slice);
     }
 
     public void SetBoundaries(IReadOnlyList<WaveformBoundary> boundaries) => _boundaries = boundaries;
 
-    public void Clear() => _samples.Clear();
+    public void Clear() => _slices.Clear();
 
     protected override void OnRender(DrawingContext dc)
     {
@@ -68,47 +80,80 @@ public sealed class WaveformView : FrameworkElement
         var height = ActualHeight;
         if (width <= 1 || height <= 1) return;
 
-        // A transparent background is still needed for the element to have
-        // a rendered area at all.
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, width, height));
 
         const double padX = 10;
         var innerWidth = Math.Max(1, width - padX * 2);
         var centreY = height / 2.0;
-        var maxBar = Math.Max(6, height / 2.0 - 12);
-
-        dc.DrawLine(CentreLine, new Point(0, centreY), new Point(width, centreY));
+        var half = Math.Max(4, height / 2.0 - 14);
 
         var windowEnd = Math.Max(WindowSeconds, CurrentSeconds);
         var windowStart = windowEnd - WindowSeconds;
 
-        var bars = Math.Max(12, BarCount);
-        var slotWidth = innerWidth / bars;
-        var barWidth = Math.Max(1.5, slotWidth - 2);
-        var opacity = IsPaused ? 0.35 : 1.0;
+        DrawSecondGrid(dc, padX, innerWidth, height, windowStart);
+        dc.DrawLine(CentreLine, new Point(0, centreY), new Point(width, centreY));
 
-        // Bucket the samples into fixed columns so the trace scrolls
-        // smoothly instead of jittering when buffers arrive unevenly.
-        var peaks = new double[bars];
-        foreach (var (seconds, level) in _samples)
+        // One column every ~3px: fine enough to show syllables, coarse enough
+        // that a 45 s window still aggregates rather than aliases.
+        var columns = Math.Max(24, (int)(innerWidth / 3.0));
+        var columnWidth = innerWidth / columns;
+        var barWidth = Math.Max(1.0, columnWidth - 1.0);
+        var opacity = IsPaused ? 0.3 : 1.0;
+
+        var mins = new float[columns];
+        var maxs = new float[columns];
+        var rms = new float[columns];
+        var seen = new bool[columns];
+
+        foreach (var slice in _slices)
         {
-            if (seconds < windowStart || seconds > windowEnd) continue;
-            var index = (int)((seconds - windowStart) / WindowSeconds * bars);
-            index = Math.Clamp(index, 0, bars - 1);
-            if (level > peaks[index]) peaks[index] = level;
+            if (slice.Seconds < windowStart || slice.Seconds > windowEnd) continue;
+            var index = (int)((slice.Seconds - windowStart) / WindowSeconds * columns);
+            index = Math.Clamp(index, 0, columns - 1);
+
+            if (!seen[index])
+            {
+                seen[index] = true;
+                mins[index] = slice.Min;
+                maxs[index] = slice.Max;
+                rms[index] = slice.Rms;
+                continue;
+            }
+
+            if (slice.Min < mins[index]) mins[index] = slice.Min;
+            if (slice.Max > maxs[index]) maxs[index] = slice.Max;
+            if (slice.Rms > rms[index]) rms[index] = slice.Rms;
         }
 
-        for (var i = 0; i < bars; i++)
+        dc.PushOpacity(opacity);
+        for (var i = 0; i < columns; i++)
         {
-            var level = peaks[i];
-            var barHeight = Math.Max(2, level * maxBar * 2);
-            var x = padX + i * slotWidth + (slotWidth - barWidth) / 2.0;
-            var rect = new Rect(x, centreY - barHeight / 2.0, barWidth, barHeight);
-            var brush = i >= bars - 8 ? RecentBarBrush : BarBrush;
-            dc.PushOpacity(opacity);
-            dc.DrawRoundedRectangle(brush, null, rect, 1, 1);
-            dc.Pop();
+            var x = padX + i * columnWidth + (columnWidth - barWidth) / 2.0;
+            var recent = i >= columns - 6;
+
+            if (!seen[i])
+            {
+                // No audio for this column yet — a hairline keeps the
+                // baseline continuous instead of leaving a hole.
+                dc.DrawRectangle(recent ? PeakRecentBrush : PeakBrush, null,
+                    new Rect(x, centreY - 0.5, barWidth, 1));
+                continue;
+            }
+
+            var top = centreY - maxs[i] * half;
+            var bottom = centreY - mins[i] * half;
+            if (bottom - top < 1) { top = centreY - 0.5; bottom = centreY + 0.5; }
+            dc.DrawRectangle(recent ? PeakRecentBrush : PeakBrush, null,
+                new Rect(x, top, barWidth, bottom - top));
+
+            var core = rms[i] * half;
+            if (core > 0.6)
+            {
+                dc.DrawRectangle(recent ? RmsRecentBrush : RmsBrush, null,
+                    new Rect(x, centreY - core, barWidth, core * 2));
+            }
         }
+        dc.Pop();
 
         DrawBoundaries(dc, padX, innerWidth, height, windowStart, windowEnd);
 
@@ -119,6 +164,18 @@ public sealed class WaveformView : FrameworkElement
         DrawLabel(dc);
     }
 
+    /// <summary>A faint tick every 5 s, so a nudge of a few tenths has a scale to read against.</summary>
+    private void DrawSecondGrid(DrawingContext dc, double padX, double innerWidth, double height,
+                                double windowStart)
+    {
+        var first = Math.Ceiling(windowStart / 5.0) * 5.0;
+        for (var t = first; t < windowStart + WindowSeconds; t += 5.0)
+        {
+            var x = padX + (t - windowStart) / WindowSeconds * innerWidth;
+            dc.DrawLine(GridLine, new Point(x, 0), new Point(x, height));
+        }
+    }
+
     private void DrawBoundaries(DrawingContext dc, double padX, double innerWidth, double height,
                                 double windowStart, double windowEnd)
     {
@@ -127,9 +184,8 @@ public sealed class WaveformView : FrameworkElement
             if (boundary.Seconds < windowStart || boundary.Seconds > windowEnd) continue;
 
             var x = padX + (boundary.Seconds - windowStart) / WindowSeconds * innerWidth;
-            var brush = new SolidColorBrush(boundary.Color);
-            brush.Freeze();
-            var pen = new Pen(brush, 1);
+            var brush = Frozen(boundary.Color);
+            var pen = new Pen(brush, boundary.IsOpen ? 2 : 1);
             pen.Freeze();
             dc.DrawLine(pen, new Point(x, 0), new Point(x, height));
 
@@ -137,6 +193,15 @@ public sealed class WaveformView : FrameworkElement
             var flag = new Rect(x, 3, text.Width + 8, text.Height + 2);
             dc.DrawRoundedRectangle(brush, null, flag, 2, 2);
             dc.DrawText(text, new Point(x + 4, 4));
+
+            if (!boundary.IsOpen) continue;
+
+            // The open mark's start is what ← and → move; label it with its
+            // own time so the nudge is readable without leaving the waveform.
+            var stamp = Text(Tenths(boundary.Seconds), 9.5, boundary.Color);
+            var box = new Rect(x + 2, height - stamp.Height - 5, stamp.Width + 8, stamp.Height + 3);
+            dc.DrawRoundedRectangle(Frozen(Color.FromArgb(0xCC, 0x16, 0x18, 0x26)), pen, box, 3, 3);
+            dc.DrawText(stamp, new Point(x + 6, height - stamp.Height - 3.5));
         }
     }
 
@@ -146,25 +211,35 @@ public sealed class WaveformView : FrameworkElement
         dc.DrawText(label, new Point(14, 8));
     }
 
+    private static string Tenths(double seconds)
+    {
+        var span = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ((int)span.TotalHours).ToString("00") + ":" + span.Minutes.ToString("00") + ":" +
+               span.Seconds.ToString("00") + "." + (span.Milliseconds / 100).ToString("0");
+    }
+
     private FormattedText Text(string value, double size, Color color)
     {
-        var brush = new SolidColorBrush(color);
-        brush.Freeze();
         return new FormattedText(
             value,
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
             new Typeface("Segoe UI"),
             size,
-            brush,
+            Frozen(color),
             VisualTreeHelper.GetDpi(this).PixelsPerDip);
+    }
+
+    private static SolidColorBrush Frozen(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     private static Pen FrozenPen(Color color, double thickness)
     {
-        var brush = new SolidColorBrush(color);
-        brush.Freeze();
-        var pen = new Pen(brush, thickness);
+        var pen = new Pen(Frozen(color), thickness);
         pen.Freeze();
         return pen;
     }

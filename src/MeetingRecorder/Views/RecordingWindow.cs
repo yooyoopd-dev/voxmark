@@ -35,7 +35,7 @@ public sealed class RecordingWindow : ShellWindow
     private readonly GlobalHotkeyService _hotkeys = new();
     private readonly ToastWindow _toast = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
-    private readonly ConcurrentQueue<(double Seconds, double Level)> _levels = new();
+    private readonly ConcurrentQueue<WaveSlice> _slices = new();
     private readonly Dictionary<int, SpeakerTile> _tiles = new();
 
     private readonly Ellipse _recDot;
@@ -45,6 +45,7 @@ public sealed class RecordingWindow : ShellWindow
     private readonly TextBlock _inputName;
     private readonly TextBlock _diskWritten;
     private readonly TextBlock _droppedLabel;
+    private readonly TextBlock _partLabel;
     private readonly Button _pauseButton;
     private readonly WaveformView _waveform;
     private readonly Border _waveWell;
@@ -109,6 +110,7 @@ public sealed class RecordingWindow : ShellWindow
         _inputName = StatValue(session.InputDeviceName);
         _diskWritten = StatValue("0.0 MB");
         _droppedLabel = Ui.Text("", 12, Palette.WarnBrush);
+        _partLabel = Ui.Text("", 12, Palette.AccentTextBrush);
 
         _pauseButton = Ui.MakeButton("⏸ Pause", "Ctrl+P", "GhostButton", (_, _) => TogglePause());
 
@@ -148,8 +150,9 @@ public sealed class RecordingWindow : ShellWindow
         _marking.Changed += OnMarkingChanged;
         _marking.Notice += message => _dock.ShowNotice(message, true);
 
-        _capture.LevelChanged += OnLevel;
+        _capture.SlicesAvailable += OnSlices;
         _capture.DeviceChanged += OnDeviceChanged;
+        _capture.PartRolled += OnPartRolled;
 
         _timer.Tick += (_, _) => Tick();
 
@@ -171,6 +174,7 @@ public sealed class RecordingWindow : ShellWindow
         stats.Children.Add(Stat("Speaking now", _speakingNow));
         stats.Children.Add(Stat("Input", _inputName));
         stats.Children.Add(Stat("Written to disk", _diskWritten));
+        stats.Children.Add(_partLabel);
         stats.Children.Add(_droppedLabel);
         stats.Margin = new Thickness(24, 0, 0, 0);
 
@@ -371,7 +375,10 @@ public sealed class RecordingWindow : ShellWindow
     {
         try
         {
-            _capture.Start(deviceNumber, _session.Mp3Path);
+            _capture.Start(deviceNumber, _session.SessionFolder, _session.AudioBaseName,
+                _session.Options.SplitMinutes);
+            _session.AudioParts = _capture.Parts.ToList();
+            if (_session.AudioParts.Count > 0) _session.AudioFileName = _session.AudioParts[0].FileName;
         }
         catch (Exception ex)
         {
@@ -404,7 +411,24 @@ public sealed class RecordingWindow : ShellWindow
         Tick();
     }
 
-    private void OnLevel(double level) => _levels.Enqueue((_capture.ElapsedSeconds, level));
+    private void OnSlices(WaveSlice[] slices)
+    {
+        // Handed over on the capture thread and drained on the UI timer, so
+        // nothing in the UI can stall the encoder.
+        foreach (var slice in slices) _slices.Enqueue(slice);
+    }
+
+    /// <summary>The recorder rolled to the next MP3; say so and keep the session file honest.</summary>
+    private void OnPartRolled(AudioPart part)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _session.AudioParts = _capture.Parts.ToList();
+            _dock.ShowNotice("Started " + _session.AudioParts[^1].FileName + " — recording never stopped", false);
+            UpdatePartLabel();
+            PersistSession(_capture.ElapsedSeconds);
+        });
+    }
 
     private void OnDeviceChanged(string message)
     {
@@ -428,9 +452,9 @@ public sealed class RecordingWindow : ShellWindow
         var elapsed = _capture.ElapsedSeconds;
         _marking.CurrentFileSeconds = elapsed;
 
-        while (_levels.TryDequeue(out var sample))
+        while (_slices.TryDequeue(out var slice))
         {
-            _waveform.Push(sample.Seconds, sample.Level);
+            _waveform.Push(slice);
         }
 
         _clock.Text = Ui.Clock(elapsed);
@@ -439,6 +463,7 @@ public sealed class RecordingWindow : ShellWindow
         _droppedLabel.Text = _capture.DroppedBuffers > 0
             ? "⚠ " + _capture.DroppedBuffers + " dropped buffers"
             : "";
+        UpdatePartLabel();
 
         if (_marking.ActiveSlot is int slot)
         {
@@ -489,7 +514,7 @@ public sealed class RecordingWindow : ShellWindow
             if (mark.StartSeconds < from || mark.StartSeconds > elapsed) continue;
             var speaker = _session.SpeakerForSlot(mark.SpeakerSlot);
             boundaries.Add(new WaveformBoundary(mark.StartSeconds, Palette.ForSlot(mark.SpeakerSlot),
-                speaker?.Initial ?? "?"));
+                speaker?.Initial ?? "?", false));
         }
 
         foreach (var open in _marking.Open)
@@ -497,7 +522,7 @@ public sealed class RecordingWindow : ShellWindow
             if (open.StartSeconds < from) continue;
             var speaker = _session.SpeakerForSlot(open.SpeakerSlot);
             boundaries.Add(new WaveformBoundary(open.StartSeconds, Palette.ForSlot(open.SpeakerSlot),
-                speaker?.Initial ?? "?"));
+                speaker?.Initial ?? "?", true));
         }
 
         return boundaries;
@@ -510,9 +535,24 @@ public sealed class RecordingWindow : ShellWindow
         {
             var isOpen = _marking.IsOpen(slot);
             var talk = _marking.TalkTimeFor(slot, elapsed);
-            var openFor = isOpen ? elapsed - _marking.OpenStartFor(slot) : 0;
-            tile.Update(isOpen, openFor, talk, marked > 0 ? talk / marked : 0);
+            var markStart = _marking.OpenStartFor(slot);
+            var openFor = isOpen ? elapsed - markStart : 0;
+            tile.Update(isOpen, openFor, talk, marked > 0 ? talk / marked : 0, markStart);
         }
+    }
+
+    /// <summary>Which MP3 is being written, when the operator asked for a split.</summary>
+    private void UpdatePartLabel()
+    {
+        if (_session.Options.SplitMinutes <= 0)
+        {
+            _partLabel.Text = "";
+            return;
+        }
+
+        var count = Math.Max(1, _capture.Parts.Count);
+        _partLabel.Text = "file " + count + " · splits every " + _session.Options.SplitMinutes + " min";
+        _partLabel.Margin = new Thickness(0, 0, 20, 0);
     }
 
     private void PersistSession(double elapsed)
@@ -556,6 +596,37 @@ public sealed class RecordingWindow : ShellWindow
         {
             _toast.ShowMark(_session, result, _capture.ElapsedSeconds);
         }
+    }
+
+    /// <summary>
+    /// The arrows trim the mark that is open right now, 0.1 s a press — the
+    /// repair for a key pressed a beat late, made without leaving the grid.
+    /// The waveform flag and the speaker tile both read from the same start,
+    /// so they move with it.
+    ///
+    /// Once a row is selected in the expanded dock, the arrows belong to that
+    /// row instead; that is the deliberate editing mode, and taking it over
+    /// would make the dock's own start/end fields unreachable.
+    /// </summary>
+    private void NudgeMark(int direction, bool coarse)
+    {
+        if (_dock.IsExpanded && _dock.SelectedMarkId is not null)
+        {
+            _dock.Nudge(direction * (coarse
+                ? MarkingEngine.NudgeStepSeconds
+                : MarkingEngine.FineNudgeStepSeconds));
+            return;
+        }
+
+        var step = direction * (coarse
+            ? MarkingEngine.NudgeStepSeconds
+            : MarkingEngine.FineNudgeStepSeconds);
+
+        if (_marking.NudgeOpenStart(step)) return;
+
+        _dock.ShowNotice(_marking.ActiveSlot is null
+            ? "Nothing is open — press a speaker's key first, then ← → to trim its start"
+            : "That start cannot move any further", false);
     }
 
     private void OnGlobalHotkey(MarkKey key)
@@ -645,11 +716,11 @@ public sealed class RecordingWindow : ShellWindow
                 e.Handled = true;
                 return;
             case Key.Left:
-                _dock.Nudge(shift ? -MarkingEngine.FineNudgeStepSeconds : -MarkingEngine.NudgeStepSeconds);
+                NudgeMark(-1, shift);
                 e.Handled = true;
                 return;
             case Key.Right:
-                _dock.Nudge(shift ? MarkingEngine.FineNudgeStepSeconds : MarkingEngine.NudgeStepSeconds);
+                NudgeMark(1, shift);
                 e.Handled = true;
                 return;
         }
@@ -793,8 +864,9 @@ public sealed class RecordingWindow : ShellWindow
         _stopping = true;
 
         _timer.Stop();
-        _capture.LevelChanged -= OnLevel;
+        _capture.SlicesAvailable -= OnSlices;
         _capture.DeviceChanged -= OnDeviceChanged;
+        _capture.PartRolled -= OnPartRolled;
         _marking.Changed -= OnMarkingChanged;
 
         // Any mark still open at Stop is closed at the stop timestamp and
@@ -802,6 +874,8 @@ public sealed class RecordingWindow : ShellWindow
         _marking.AutoCloseAt(_capture.ElapsedSeconds);
 
         _session.AudioDurationSeconds = _capture.ElapsedSeconds;
+        _session.AudioParts = _capture.Parts.ToList();
+        if (_session.AudioParts.Count > 0) _session.AudioFileName = _session.AudioParts[0].FileName;
         _session.Marks = _marking.Marks.Select(m => m.Clone()).OrderBy(m => m.StartSeconds).ToList();
         _session.Gaps = _marking.ComputeGaps(_session.AudioDurationSeconds).ToList();
         _session.DroppedBufferCount = _capture.DroppedBuffers;

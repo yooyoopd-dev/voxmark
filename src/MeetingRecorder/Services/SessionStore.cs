@@ -18,22 +18,27 @@ public static class SessionStore
 
     public static RecordingSession Create(
         string title, string room, IEnumerable<Speaker> speakers, SessionOptions options,
-        string inputDeviceName, DateTimeOffset startedAt)
+        string inputDeviceName, DateTimeOffset scheduledAt, DateTimeOffset startedAt)
     {
         var slug = AppPaths.Slugify(title);
-        var stamp = startedAt.ToString("yyyy-MM-dd");
+        // The folder is named for the meeting's own date, so a session set up
+        // in advance files itself where the operator expects to find it.
+        var stamp = scheduledAt.ToString("yyyy-MM-dd");
         var folder = UniqueFolder(Path.Combine(AppPaths.SessionsRoot, stamp + "_" + slug));
         Directory.CreateDirectory(folder);
 
+        var baseName = slug + "_" + stamp;
         return new RecordingSession
         {
             Title = title,
             Room = room,
             SessionFolder = folder,
-            AudioFileName = slug + "_" + stamp + ".mp3",
+            AudioBaseName = baseName,
+            AudioFileName = baseName + ".mp3",
             Speakers = speakers.Select(s => s.Clone()).ToList(),
             Options = options,
             InputDeviceName = inputDeviceName,
+            ScheduledAt = scheduledAt,
             StartedAt = startedAt,
         };
     }
