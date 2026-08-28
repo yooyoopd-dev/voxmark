@@ -270,12 +270,16 @@ public static class WhisperRuntime
     /// </summary>
     public static string LoadedRuntimeLabel => RuntimeOptions.LoadedLibrary switch
     {
-        RuntimeLibrary.Cuda or RuntimeLibrary.Cuda12 => "CUDA",
+        null => "not loaded",
+        RuntimeLibrary.Cuda => "CUDA",
         RuntimeLibrary.Vulkan => "Vulkan",
         RuntimeLibrary.OpenVino => "OpenVINO",
         RuntimeLibrary.CoreML => "CoreML",
         RuntimeLibrary.Cpu or RuntimeLibrary.CpuNoAvx => "CPU",
-        _ => "not loaded",
+        // A backend a later Whisper.net added — name it rather than claiming
+        // nothing loaded, which would be the wrong thing to tell an operator
+        // whose transcription is in fact running.
+        var other => other.ToString(),
     };
 
     /// <summary>"ggml-small.en.bin" reads better in a header as "small.en".</summary>
