@@ -39,9 +39,7 @@ public sealed class AudioCaptureService : IDisposable
     /// the app, so it stays as an opt-in device entry rather than silently
     /// disappearing. The real format is reported into the Markdown either way.
     /// </summary>
-    public const int LoopbackDeviceNumber = -1;
-
-    private static readonly WaveFormat MicFormat = new(SampleRate, BitsPerSample, Channels);
+    public const int LoopbackDeviceNumber = AudioDevices.LoopbackDeviceNumber;
 
     private readonly int _bitrateKbps;
 
@@ -100,23 +98,7 @@ public sealed class AudioCaptureService : IDisposable
     /// <summary>Raised when the input device changed underneath us, with a line for the banner.</summary>
     public event Action<string>? DeviceChanged;
 
-    public static IReadOnlyList<(int Id, string Name)> GetInputDevices()
-    {
-        var devices = new List<(int Id, string Name)>();
-        for (var i = 0; i < WaveInEvent.DeviceCount; i++)
-        {
-            try
-            {
-                devices.Add((i, WaveInEvent.GetCapabilities(i).ProductName));
-            }
-            catch (Exception)
-            {
-                // A device can vanish between the count and the query.
-            }
-        }
-        devices.Add((LoopbackDeviceNumber, "System audio (loopback)"));
-        return devices;
-    }
+    public static IReadOnlyList<(int Id, string Name)> GetInputDevices() => AudioDevices.List();
 
     /// <summary>
     /// Begin recording into <paramref name="folder"/>. With
@@ -136,11 +118,13 @@ public sealed class AudioCaptureService : IDisposable
         _baseName = baseName;
         _parts.Clear();
 
-        _waveIn = CreateDevice(deviceNumber, out var name);
+        // Opened before the encoder exists, because which format the driver
+        // accepts decides what the encoder has to be built for.
+        _waveIn = AudioDevices.OpenAndStart(deviceNumber, out var name, out var format);
         DeviceName = name;
-        _writerFormat = _waveIn.WaveFormat;
-        _bytesPerSecond = _writerFormat.AverageBytesPerSecond;
-        FormatDescription = Describe(_writerFormat, _bitrateKbps);
+        _writerFormat = format;
+        _bytesPerSecond = format.AverageBytesPerSecond;
+        FormatDescription = Describe(format, _bitrateKbps);
 
         // A split is expressed in bytes so the check on the capture thread is
         // an integer comparison rather than a division per buffer.
@@ -152,7 +136,6 @@ public sealed class AudioCaptureService : IDisposable
 
         _waveIn.DataAvailable += OnDataAvailable;
         _waveIn.RecordingStopped += OnRecordingStopped;
-        _waveIn.StartRecording();
 
         IsCapturing = true;
         IsPaused = false;
@@ -202,38 +185,6 @@ public sealed class AudioCaptureService : IDisposable
             OpenNextPart();
         }
         PartRolled?.Invoke(rolled);
-    }
-
-    private static IWaveIn CreateDevice(int deviceNumber, out string name)
-    {
-        if (deviceNumber == LoopbackDeviceNumber)
-        {
-            var capture = new WasapiLoopbackCapture();
-            name = SafeLoopbackName();
-            return capture;
-        }
-
-        name = WaveInEvent.GetCapabilities(deviceNumber).ProductName;
-        return new WaveInEvent
-        {
-            DeviceNumber = deviceNumber,
-            WaveFormat = MicFormat,
-            BufferMilliseconds = 50,
-        };
-    }
-
-    private static string SafeLoopbackName()
-    {
-        try
-        {
-            var enumerator = new MMDeviceEnumerator();
-            var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-            return "System audio · " + device.FriendlyName;
-        }
-        catch (Exception)
-        {
-            return "System audio (loopback)";
-        }
     }
 
     private static string Describe(WaveFormat format, int bitrateKbps)
@@ -390,11 +341,12 @@ public sealed class AudioCaptureService : IDisposable
         {
             try
             {
-                var device = CreateDevice(candidate, out var name);
-                if (!device.WaveFormat.Equals(_writerFormat))
+                var device = AudioDevices.OpenAndStart(candidate, out var name, out var format);
+                if (!format.Equals(_writerFormat))
                 {
                     // A different format cannot be appended to the MP3 that
                     // is already open, so this candidate is no good.
+                    try { device.StopRecording(); } catch (Exception) { }
                     device.Dispose();
                     continue;
                 }
@@ -404,7 +356,6 @@ public sealed class AudioCaptureService : IDisposable
                 DeviceName = name;
                 device.DataAvailable += OnDataAvailable;
                 device.RecordingStopped += OnRecordingStopped;
-                device.StartRecording();
                 DeviceChanged?.Invoke("Input \"" + failed + "\" disappeared — recording continued on \"" + name + "\".");
                 return;
             }
@@ -420,10 +371,15 @@ public sealed class AudioCaptureService : IDisposable
 
     private IEnumerable<int> FallbackCandidates()
     {
+        // Whatever Windows now calls the default is the best first guess when
+        // the device that was unplugged was the previous default.
+        if (_deviceNumber != AudioDevices.DefaultDeviceNumber) yield return AudioDevices.DefaultDeviceNumber;
+
         for (var i = 0; i < WaveInEvent.DeviceCount; i++)
         {
             if (i != _deviceNumber) yield return i;
         }
+
         if (_deviceNumber != LoopbackDeviceNumber) yield return LoopbackDeviceNumber;
     }
 
