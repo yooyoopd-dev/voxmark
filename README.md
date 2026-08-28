@@ -1,46 +1,64 @@
-# Meeting Recorder & Speaker Marker
+# VoxMark
 
-A Windows 11 desktop app for one specific job: one PC sits in a meeting
-room, records the whole thing to a single MP3, and lets one operator mark
-who is speaking by clicking a tile or pressing a number key. On Stop it
-writes an MP3 + a Markdown file of speaker segments and timestamp gaps —
-handed to an LLM to produce a per-speaker transcript. Nothing else.
+VoxMark captures live meetings with precision speaker tagging, giving you
+audio and timestamps for your LLM.
+
+One Windows PC sits in the meeting room, records the whole thing to a single
+MP3, and lets one operator mark who is speaking by clicking a tile or
+pressing a number key. On Stop it writes that MP3 plus a Markdown file of
+speaker segments and timestamp gaps — hand both to an LLM and you get a
+per-speaker transcript. Nothing else.
 
 Offline only — no accounts, no network calls, no cloud sync.
 
-Full behavioural spec lives in the design guide this was built from
-(`docs/recorder-design-guide.html`, or ask for the original
-`claude.ai/design` link). Development conventions and what's implemented
-vs. deferred are in [`CLAUDE.md`](CLAUDE.md).
+## Download
 
-## Run from source (Windows only)
+**[⬇ Download the latest VoxMark.exe](https://github.com/yooyoopd-dev/voxmark/releases/latest)**
 
-Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+Grab `VoxMark.exe` from the Assets list on that page. No GitHub account, no
+login, no sign-up — release files are public, so you can download them on
+any PC.
 
-```powershell
-dotnet run --project src/MeetingRecorder
+> **Note:** the per-build files under the repository's *Actions* tab are
+> GitHub *artifacts*, and those always require a GitHub login to download,
+> even on a public repository. That's a GitHub restriction, not a setting
+> this project can change. Use the Releases page above instead.
+
+## Install and run
+
+There is no installer. `VoxMark.exe` **is** the whole app:
+
+1. Copy `VoxMark.exe` anywhere you like — Desktop, `C:\Tools\`, a USB stick.
+2. Double-click it.
+3. Windows SmartScreen will warn you the first time, because the file is not
+   code-signed. Click **More info → Run anyway**.
+
+That's it. Nothing is written to `Program Files`, nothing is added to the
+registry, and there is no uninstaller — to remove VoxMark, delete the file.
+
+**Requirements:** 64-bit Windows 10 or 11. Nothing else. You do **not** need
+to install the .NET runtime, ffmpeg, or any codec — the .NET runtime and the
+MP3 encoder are embedded inside the exe, which is why it is a fairly large
+download.
+
+## Where your recordings go
+
+Everything stays on the machine that recorded it, under your Documents
+folder:
+
+```
+Documents\VoxMark\
+  presets.json                          ← saved rosters
+  Sessions\
+    2026-03-12_weekly-product-review\
+      weekly-product-review_2026-03-12.mp3   ← the audio
+      weekly-product-review_2026-03-12.md    ← speaker segments + gaps, for the LLM
+      session.json                           ← app state
+      marks.jsonl                            ← append-only journal (crash recovery)
 ```
 
-## Build the standalone .exe
-
-```powershell
-dotnet publish src/MeetingRecorder/MeetingRecorder.csproj `
-  -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true `
-  -o publish
-```
-
-The result, `publish/MeetingRecorder.exe`, is the entire deliverable — copy
-that one file anywhere on a 64-bit Windows 10/11 machine and run it. No
-.NET install, no ffmpeg, no extra DLLs to place alongside it (the MP3
-encoder is bundled). See [`CLAUDE.md`](CLAUDE.md) for the one prerequisite
-that can't be removed: the exe is unsigned, so first run shows a
-SmartScreen prompt (More info → Run anyway).
-
-Every push to `main` and every `v*` tag also builds this exe automatically
-via [`.github/workflows/build-windows-exe.yml`](.github/workflows/build-windows-exe.yml);
-tagged builds are attached to a GitHub Release.
+The `.mp3` and the `.md` are the two files you hand to an LLM. Deleting a
+session inside the app only unlists it — VoxMark never deletes your audio.
 
 ## Using it
 
@@ -70,11 +88,52 @@ tagged builds are attached to a GitHub Release.
 
    The dock flags its own suspects: marks under 2 seconds, and sub-0.3-second
    gaps between two different speakers. Recording never stops while you edit.
-4. **Stop** — writes `<slug>_<date>.mp3` and `<slug>_<date>.md` into
-   `Documents\VoxMark\Sessions\<date>_<slug>\`, alongside a `session.json`
-   and the `marks.jsonl` journal that makes a crash recoverable.
+4. **Stop** — writes the MP3 and the Markdown into the session folder shown
+   above.
 
-## What's implemented vs. deferred
+## Build from source
+
+Building requires **Windows** and the
+[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) — WPF's
+reference assemblies for `net8.0-windows` only exist on Windows.
+
+```powershell
+# run it directly
+dotnet run --project src/MeetingRecorder
+
+# or produce the standalone exe
+dotnet publish src/MeetingRecorder/MeetingRecorder.csproj `
+  -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  -o publish
+```
+
+The result is `publish/VoxMark.exe` — that one file is the entire
+deliverable.
+
+## Releasing a new version
+
+[`.github/workflows/build-windows-exe.yml`](.github/workflows/build-windows-exe.yml)
+builds the exe on every push to `main` and on every pull request. Pushing a
+`v*` tag additionally attaches `VoxMark.exe` to that tag's GitHub Release,
+which is what makes it downloadable without a login:
+
+```bash
+git tag -a v1.0.1 -m "VoxMark 1.0.1"
+git push origin v1.0.1
+```
+
+(Or use **Releases → Draft a new release** on GitHub and create the tag
+there.) Once the workflow finishes, the exe appears under that release's
+Assets.
+
+## Design and scope
+
+The full behavioural spec is the design guide this was built from —
+[`docs/recorder-design-guide.html`](docs/recorder-design-guide.html), meant
+to be read as text rather than opened in a browser. Development conventions
+and what's implemented vs. deferred are in [`CLAUDE.md`](CLAUDE.md).
 
 All five screens in the design guide are built — library, setup, record,
 marks dock, export — along with the global hotkeys, the crash-recovery

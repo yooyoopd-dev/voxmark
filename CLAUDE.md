@@ -7,7 +7,9 @@ for this project specifically.
 
 ## What this is
 
-**Meeting Recorder & Speaker Marker** — a Windows 11 desktop app. One PC
+**VoxMark** — a Windows 11 desktop app, called "Meeting Recorder & Speaker
+Marker" in the design guide below; VoxMark is the shipping name, and the one
+the assembly, the exe and the `Documents\VoxMark\` folder all use. One PC
 sits in a meeting room, records the whole meeting to a single MP3, and lets
 one operator mark who is speaking by clicking a tile or pressing a number
 key. Output is that MP3 plus a Markdown file of speaker segments and
@@ -41,7 +43,7 @@ interaction rule.
 4. **Goal-driven execution.** Turn a task into a checkable outcome:
    `[change] → verify: [how to confirm it worked]`. For this repo,
    "verify" almost always means "the CI build in
-   `.github/workflows/build-windows-exe.yml` produces `MeetingRecorder.exe`"
+   `.github/workflows/build-windows-exe.yml` produces `VoxMark.exe`"
    since a WPF app can't be run or built headless in this Linux dev
    environment — see below.
 
