@@ -88,11 +88,15 @@ public sealed class RecordingWindow : ShellWindow
     /// The live transcript strip and its header. Present only when speech
     /// recognition is actually running: an empty strip would cost the speaker
     /// grid height for nothing.
+    ///
+    /// The explicit nulls are for the Lite build, which never assigns any of
+    /// these — without them the compiler warns four times on every Lite
+    /// publish about fields that are deliberately absent there.
     /// </summary>
-    private readonly TranscriptView? _transcriptView;
-    private readonly TextBlock? _transcriptStatus;
-    private readonly UIElement? _transcriptRow;
-    private readonly TranscriptStore? _transcriptStore;
+    private readonly TranscriptView? _transcriptView = null;
+    private readonly TextBlock? _transcriptStatus = null;
+    private readonly UIElement? _transcriptRow = null;
+    private readonly TranscriptStore? _transcriptStore = null;
 #if !VOXMARK_LITE
     private readonly TranscriptionService? _transcription;
 #endif

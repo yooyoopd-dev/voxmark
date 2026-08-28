@@ -103,6 +103,9 @@ public static class TranscriptMapper
         return total;
     }
 
+    private static readonly char[] Whitespace = { ' ', '\t', '\r', '\n' };
+
+    /// <summary>Whitespace-separated words, for the export screen's readout.</summary>
     public static int WordCount(IEnumerable<TranscriptSegment> segments) =>
-        segments.Sum(s => s.Text.Split(' ', '\n', '\t', StringSplitOptions.RemoveEmptyEntries).Length);
+        segments.Sum(s => s.Text.Split(Whitespace, StringSplitOptions.RemoveEmptyEntries).Length);
 }
