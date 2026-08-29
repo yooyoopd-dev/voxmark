@@ -50,7 +50,7 @@ public static class TranscriptionSettingsStore
     {
         try
         {
-            AppPaths.EnsureCreated();
+            AppPaths.EnsureRoot();
             File.WriteAllText(Path, JsonSerializer.Serialize(settings, Json));
         }
         catch (Exception)

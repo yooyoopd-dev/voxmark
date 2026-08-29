@@ -84,7 +84,8 @@ interaction rule.
     (`marks.jsonl`, fsync per operation), `SessionStore` / `PresetStore`
     (the on-disk session folder and presets), `MarkdownExporter` (the output
     contract), `GlobalHotkeyService`, `PowerKeepAwake`, `KeyMap`, `DiskInfo`,
-    `BuildProfile` (which edition this exe is).
+    `BuildProfile` (which edition this exe is), `AppSettingsStore` (the
+    app-wide settings, in `%LocalAppData%` — see "Settings vs. Setup").
     Speech recognition adds `WhisperRuntime` (finds the natives and the model
     file) and `TranscriptionService` (the pipeline) — **the only two files
     that name a Whisper.net type, and the only two Lite removes from
@@ -97,6 +98,7 @@ interaction rule.
     where the guide asks for something WPF has no primitive for.
   - `Views/` — `ShellWindow` (shared 40px chrome), `LibraryWindow` (S1),
     `SetupWindow` (S2), `RecordingWindow` (S3+S4), `ExportWindow` (S5),
+    `SettingsWindow` (the app-wide settings dialog, see below),
     `ToastWindow` (the mini bar), `Ui` (small layout builders). UI is built
     in code rather than XAML data-binding, to keep behaviour traceable in
     one place.
@@ -247,6 +249,43 @@ in Lite.
 `AssemblyName` is `VoxMark` in both, so crash logs, session folders and the
 Markdown `tool:` field do not fork; CI renames the Lite output. The running
 app names its own edition through `BuildProfile`, on the library screen.
+
+## Settings vs. Setup — what belongs to the PC, what to the meeting
+
+Two homes for what looks like one pile of options, and the line between them
+is *what the value is about*, not how often it changes:
+
+- **`SettingsWindow`, reached from the Library** — the machine. Where
+  recordings are saved (`AppSettingsStore.SessionsRoot`), the mark-start
+  offset and the MP3 bitrate a new meeting starts from, the whisper model
+  file and its language (`TranscriptionSettingsStore`), and the copyable
+  diagnostics Log. An operator sets these once on this PC.
+- **`SetupWindow`, before every meeting** — the meeting. Title, date, room,
+  the roster and its keys, presets, split interval, overlapping marks, and
+  the Live-transcription on/off toggle. Plus the **unskippable input check**
+  — device and level meter — which the design guide's section 07 makes a
+  ritual, so it never moves to Settings.
+
+Setup shows a read-only echo with a "Settings" link for each value it no
+longer owns, so nobody starts a recording without seeing where it will land.
+The echo takes its value from `_options`, which is seeded from the app
+defaults but **overridden by a saved plan** — a `MeetingPlan` records what it
+was saved with, and reopening it must not silently retune it. Coming back
+from the dialog adopts the app defaults, because the operator just chose
+them there deliberately.
+
+Two path rules fall out of this and are easy to break:
+
+- `AppPaths.EnsureRoot()` creates `Documents\VoxMark\` and
+  `AppPaths.EnsureCreated()` creates that **and** the (redirectable)
+  sessions folder. Anything writing an app-level file — `plans.json`,
+  `presets.json`, `transcription.json` — calls `EnsureRoot`. They were once
+  the same call, and a redirected save location meant `Documents\VoxMark\`
+  was never created, so the next `plans.json` write threw
+  `FileNotFoundException` from a click handler and took the app down.
+- Every store write reachable from a click handler is wrapped, and its
+  diagnostic goes to `AppPaths.Note` for the Settings Log. An unhandled
+  exception on the dispatcher is not an error message, it is a closed app.
 
 ## Output contract (read section 10 before touching `MarkdownExporter`)
 

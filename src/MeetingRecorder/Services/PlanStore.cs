@@ -31,7 +31,7 @@ public static class PlanStore
 
     public static void Save(List<MeetingPlan> plans)
     {
-        AppPaths.EnsureCreated();
+        AppPaths.EnsureRoot();
         var temp = FilePath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(plans, Json));
         File.Move(temp, FilePath, overwrite: true);
