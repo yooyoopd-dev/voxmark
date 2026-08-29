@@ -261,10 +261,17 @@ public static class MarkdownExporter
     }
 
     /// <summary>
-    /// The standing brief for whoever picks this file up — which in practice
-    /// is an LLM handed the Markdown and the MP3 together. Everything above
-    /// says what was recorded; this says what to do with it, so the operator
-    /// does not have to write the same prompt after every meeting.
+    /// The standing brief for whoever picks this file up — in practice an LLM
+    /// handed the Markdown, usually with the MP3. Everything above says what
+    /// was recorded; this says what to do with it, so the operator does not
+    /// have to write the same prompt after every meeting.
+    ///
+    /// The brief branches at *read* time rather than here, because the export
+    /// cannot know what the agent will actually be given: the MP3 may not
+    /// travel with the Markdown. So it names the routes and lets the agent
+    /// pick — audio present means transcribe it; audio absent with a
+    /// "## Transcript" section present means write the report straight from
+    /// that section; neither means say so instead of inventing a meeting.
     ///
     /// It goes last, after the Notes, for the same reason the transcript goes
     /// after the Gaps table: the section 10 contract above it is untouched,
@@ -281,53 +288,81 @@ public static class MarkdownExporter
         var split = partCount > 1;
 
         sb.Append("\n## Agent Instructions\n\n");
-        sb.Append("You are an AI agent. This file and the audio it names were recorded\n");
-        sb.Append("together: the file records **who held the floor and when**, the audio\n");
-        sb.Append("records **what was said**. Combine them into one new file, `transcript.md`,\n");
-        sb.Append("written beside this one.\n\n");
+        sb.Append("You are an AI agent. This file records **who held the floor and when**.\n");
+        sb.Append("Your job is to pair that with **what was said** and write one new file,\n");
+        sb.Append("`transcript.md`, beside this one.\n\n");
 
-        sb.Append("### Inputs\n\n");
-        if (split)
-        {
-            sb.Append("- The session's ").Append(partCount).Append(" MP3 files and their Markdown\n");
-            sb.Append("  files — this is part ").Append(part.Index).Append(". Work from all ")
-              .Append(partCount).Append(" together and produce a\n");
-            sb.Append("  single `transcript.md` covering the whole session; do not write one\n");
-            sb.Append("  transcript per part. Every part already shares one timebase, so the\n");
-            sb.Append("  times line up across files without adjustment.\n");
-        }
-        else
-        {
-            sb.Append("- The MP3 named in `audio_file`, in this same folder.\n");
-        }
+        sb.Append("### Step 1 — pick your route\n\n");
+        sb.Append("Check what you were actually given, then follow the matching route. Do not\n");
+        sb.Append("ask for a file you were not handed.\n\n");
 
-        sb.Append("- The speaker table above — the operator's own record of who was speaking,\n");
-        sb.Append("  with `start` and `end` on the timebase named in `timebase`.\n");
-        sb.Append("- `## Gaps` — ranges where no speaker was marked.\n");
+        sb.Append("**Route A — you have the audio");
+        if (hasTranscript) sb.Append(" (preferred)");
+        sb.Append(".**\n");
+        sb.Append(split
+            ? "The session's " + partCount + " MP3 files are present.\n"
+            : "The MP3 named in `audio_file` is present.\n");
+        sb.Append("Transcribe the audio yourself and align it to the speaker rows above, per\n");
+        sb.Append("Step 2.\n");
         if (hasTranscript)
         {
-            sb.Append("- `## Transcript` — speech already recognised on the recording machine.\n");
-            sb.Append("  Treat it as a first pass to check and correct against the audio, not as\n");
-            sb.Append("  finished output: it is machine recognition with no human review.\n");
+            sb.Append("The `## Transcript` section below is machine recognition with no human\n");
+            sb.Append("review — use it as a first pass to check and correct against the audio,\n");
+            sb.Append("never as finished text.\n");
         }
         sb.Append('\n');
 
-        sb.Append("### Task\n\n");
+        if (hasTranscript)
+        {
+            sb.Append("**Route B — you do not have the audio.** This file already carries a\n");
+            sb.Append("`## Transcript` section: speech recognised on the recording machine and\n");
+            sb.Append("already grouped under the speaker each passage was marked to. That is\n");
+            sb.Append("enough. Skip Step 2 entirely, take those blocks as your source text, and\n");
+            sb.Append("go straight to Step 3 — produce `transcript.md` and nothing else. Do not\n");
+            sb.Append("stop to ask for the MP3.\n\n");
+            sb.Append("Two things to carry through on this route: the recognised text was never\n");
+            sb.Append("checked against the audio by a person, so keep wording you cannot verify\n");
+            sb.Append("rather than \"improving\" it, and say once at the top of `transcript.md`\n");
+            sb.Append("that it was built from the embedded recognition rather than the\n");
+            sb.Append("recording. If that text is not in English, translate it.\n\n");
+        }
+        else
+        {
+            sb.Append("**Route B — you do not have the audio.** This file has no `## Transcript`\n");
+            sb.Append("section either, so nothing here records what was said: the speaker table\n");
+            sb.Append("above is timings only. Say that plainly and stop. Do not write a\n");
+            sb.Append("`transcript.md` from the speaker names and timings alone — a transcript\n");
+            sb.Append("of a meeting you cannot hear would be invention, not a transcript.\n\n");
+        }
+
+        sb.Append("### Step 2 — align the speech to the speakers (Route A only)\n\n");
         sb.Append("1. Transcribe the audio in **English**. If the meeting was held in another\n");
         sb.Append("   language, translate it into English and say which language it was.\n");
-        sb.Append("2. Align the speech to the speaker rows above **by time**. A row's `start`\n");
-        sb.Append("   and `end` bound that speaker's turn, so speech inside that range is\n");
-        sb.Append("   theirs. Do not invent speaker changes the table does not show.\n");
+        sb.Append("2. Align what you hear to the speaker rows above **by time**. A row's\n");
+        sb.Append("   `start` and `end` bound that speaker's turn, so speech inside that range\n");
+        sb.Append("   is theirs. Do not invent speaker changes the table does not show.\n");
         sb.Append("3. Give a passage that straddles two rows to the row it overlaps most.\n");
         sb.Append("   Where the table and your own read of the voices disagree, follow the\n");
         sb.Append("   table — it is a person's live record, and it is the point of this file.\n");
         sb.Append("4. Speech inside a `## Gaps` range has no marked speaker. File it under\n");
-        sb.Append("   \"Unmarked\" rather than guessing who was talking.\n");
-        sb.Append("5. Write every timestamp in the same `HH:MM:SS.mmm` form and on the same\n");
-        sb.Append("   timebase as this file, so both files can be read side by side.\n\n");
+        sb.Append("   \"Unmarked\" rather than guessing who was talking.\n\n");
 
-        sb.Append("### Output — `transcript.md`\n\n");
-        sb.Append("Write these four sections, in this order:\n\n");
+        sb.Append("### Step 3 — write `transcript.md`\n\n");
+        // The split rule belongs to both routes, not to Route A's alignment
+        // work: a session recorded in parts is still one meeting, and Route B
+        // skips Step 2 entirely.
+        if (split)
+        {
+            sb.Append("This session was recorded as ").Append(partCount)
+              .Append(" parts and this is part ").Append(part.Index).Append(".\n");
+            sb.Append("Whichever route you took, work from all ").Append(partCount)
+              .Append(" into a single `transcript.md`\n");
+            sb.Append("covering the whole session — not one per part. They already share one\n");
+            sb.Append("timebase, so the times line up across files with no adjustment.\n\n");
+        }
+        sb.Append("Write every timestamp in the same `HH:MM:SS.mmm` form and on the same\n");
+        sb.Append("timebase as this file, so the two can be read side by side. Then write\n");
+        sb.Append("these four sections, in this order:\n\n");
         sb.Append("1. `## Full Transcript` — the verbatim English transcript in chronological\n");
         sb.Append("   order, one block per speaker turn, each headed with the same mark number,\n");
         sb.Append("   speaker id, name and time range this file uses. This is the record of\n");
@@ -343,69 +378,9 @@ public static class MarkdownExporter
         sb.Append("   rather than word for word, and leave names, product names and figures as\n");
         sb.Append("   they were spoken.\n\n");
 
-        sb.Append("Ground every statement in the audio. Where it is unclear, write\n");
+        sb.Append("Ground every statement in your source. Where it is unclear, write\n");
         sb.Append("`[inaudible HH:MM:SS.mmm]` instead of guessing, and never add a decision,\n");
         sb.Append("number, owner or deadline that nobody said.\n");
-    }
-
-    /// <summary>
-    /// The recognised words, grouped under the speaker they were attributed
-    /// to. Additive to the section 10 contract rather than a change to it:
-    /// the segments table and the Gaps table above are untouched, so a reader
-    /// that only knows the original format loses nothing, and one that reads
-    /// this gets the transcript already split by speaker.
-    ///
-    /// Nothing is written at all when no speech was recognised, so a session
-    /// recorded without transcription produces exactly the file it used to.
-    /// </summary>
-    private static void AppendTranscript(StringBuilder sb, RecordingSession session,
-                                         IReadOnlyList<Mark> marks, IReadOnlyList<TranscriptSegment> segments,
-                                         IReadOnlyDictionary<long, int> numbers)
-    {
-        var blocks = TranscriptMapper.Blocks(segments, marks);
-        if (blocks.Count == 0) return;
-
-        sb.Append("\n## Transcript\n\n");
-        sb.Append("Recognised speech in chronological order, grouped by the speaker mark it\n");
-        sb.Append("falls in. Times are on the same timebase as the table above. Text under\n");
-        sb.Append("\"unmarked\" was spoken while no speaker was marked — transcribe it, but\n");
-        sb.Append("attribute it with care.\n\n");
-
-        foreach (var block in blocks)
-        {
-            var text = block.Text;
-            if (text.Length == 0) continue;
-
-            sb.Append("### ");
-            if (block.Mark is { } mark)
-            {
-                var speaker = session.SpeakerForSlot(mark.SpeakerSlot);
-                sb.Append(numbers.TryGetValue(mark.Id, out var number) ? number : 0)
-                  .Append(" · ").Append(speaker?.Id ?? "S?")
-                  .Append(" · ").Append(speaker?.Name ?? "Unknown");
-            }
-            else
-            {
-                sb.Append("— · unmarked");
-            }
-
-            // A marked block's header is the mark's own start/end — the same
-            // field the table above prints — so the two sections agree by
-            // construction rather than by two independently-derived numbers
-            // that can drift apart. Whisper's segment boundaries follow its
-            // own decoding, not the speaker changes, so the *words'* actual
-            // audio span (block.StartSeconds/EndSeconds) can legitimately
-            // extend past the mark either way; that's still true and still
-            // the right span for the recognised text, it's just not what
-            // belongs in a header meant to say "this is mark N's turn."
-            // Unmarked blocks have no mark to match, so they keep the
-            // segment-derived span — the only honest source there.
-            var headerStart = block.Mark?.StartSeconds ?? block.StartSeconds;
-            var headerEnd = block.Mark?.EndSeconds ?? block.EndSeconds;
-            sb.Append(" — ").Append(Timestamp(headerStart))
-              .Append(" → ").Append(Timestamp(headerEnd)).Append("\n\n");
-            sb.Append(text).Append("\n\n");
-        }
     }
 
     /// <summary>

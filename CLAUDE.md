@@ -307,8 +307,7 @@ agent brief below — that is the property to check first if you touch
 `MarkdownExporter`.
 
 `## Agent Instructions` is the one section every export carries, transcript
-or not: the standing brief for the LLM the file is handed to, telling it to
-transcribe the MP3 in English against these speaker rows and write a
+or not: the standing brief for the LLM the file is handed to, asking for a
 `transcript.md` holding the verbatim per-speaker transcript, an executive
 summary, per-speaker key points, and the same summary and key points again
 in Korean. It exists so the operator does not retype that prompt after every
@@ -318,6 +317,18 @@ the Notes, with only a one-line pointer under the title so it is not missed
 it addresses the agent rather than the room. Changing what it asks for
 changes what every downstream agent produces, so treat its wording as
 interface, not prose.
+
+The brief **branches at read time, not at export time**, because the export
+cannot know what the agent will be handed — the MP3 does not always travel
+with the Markdown. So it names routes and lets the agent pick: audio present
+means transcribe it; audio absent with a `## Transcript` section present
+means skip the alignment step and write the report straight from that
+section, saying in the output that it came from unreviewed recognition;
+audio absent with no transcript means say so and stop, because a transcript
+built from speaker names and timings alone is invention. `hasTranscript` is
+therefore the only thing the exporter decides — it picks which Route B the
+file gets — and the split-session rule lives in the write-up step so it
+reaches both routes rather than only the transcribing one.
 
 Attribution rule, stated in the output itself: a segment goes to the mark it
 overlaps most. Whisper's boundaries follow its own decoding rather than the
