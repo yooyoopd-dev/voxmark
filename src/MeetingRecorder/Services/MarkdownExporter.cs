@@ -142,6 +142,8 @@ public static class MarkdownExporter
 
         sb.Append("Speaker segments in chronological order. Each row is one continuous\n");
         sb.Append("turn marked by the operator during the meeting.\n");
+        sb.Append("\nIf you are an AI agent, read \"## Agent Instructions\" at the end of this\n");
+        sb.Append("file first — it is the task this file exists for.\n");
         if (split)
         {
             sb.Append("\nTimes are offsets from the start of part 1, not from the start of\n");
@@ -253,7 +255,97 @@ public static class MarkdownExporter
             sb.Append("- ").Append(note).Append('\n');
         }
 
+        AppendAgentInstructions(sb, part, partCount, segments.Count > 0);
+
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The standing brief for whoever picks this file up — which in practice
+    /// is an LLM handed the Markdown and the MP3 together. Everything above
+    /// says what was recorded; this says what to do with it, so the operator
+    /// does not have to write the same prompt after every meeting.
+    ///
+    /// It goes last, after the Notes, for the same reason the transcript goes
+    /// after the Gaps table: the section 10 contract above it is untouched,
+    /// and a reader that only knows that contract loses nothing. The pointer
+    /// under the title is what keeps it from being missed down here.
+    ///
+    /// Written in English regardless of the meeting's own language — it
+    /// addresses the agent, not the room — while the report it asks for is
+    /// bilingual.
+    /// </summary>
+    private static void AppendAgentInstructions(StringBuilder sb, AudioPart part, int partCount,
+                                                bool hasTranscript)
+    {
+        var split = partCount > 1;
+
+        sb.Append("\n## Agent Instructions\n\n");
+        sb.Append("You are an AI agent. This file and the audio it names were recorded\n");
+        sb.Append("together: the file records **who held the floor and when**, the audio\n");
+        sb.Append("records **what was said**. Combine them into one new file, `transcript.md`,\n");
+        sb.Append("written beside this one.\n\n");
+
+        sb.Append("### Inputs\n\n");
+        if (split)
+        {
+            sb.Append("- The session's ").Append(partCount).Append(" MP3 files and their Markdown\n");
+            sb.Append("  files — this is part ").Append(part.Index).Append(". Work from all ")
+              .Append(partCount).Append(" together and produce a\n");
+            sb.Append("  single `transcript.md` covering the whole session; do not write one\n");
+            sb.Append("  transcript per part. Every part already shares one timebase, so the\n");
+            sb.Append("  times line up across files without adjustment.\n");
+        }
+        else
+        {
+            sb.Append("- The MP3 named in `audio_file`, in this same folder.\n");
+        }
+
+        sb.Append("- The speaker table above — the operator's own record of who was speaking,\n");
+        sb.Append("  with `start` and `end` on the timebase named in `timebase`.\n");
+        sb.Append("- `## Gaps` — ranges where no speaker was marked.\n");
+        if (hasTranscript)
+        {
+            sb.Append("- `## Transcript` — speech already recognised on the recording machine.\n");
+            sb.Append("  Treat it as a first pass to check and correct against the audio, not as\n");
+            sb.Append("  finished output: it is machine recognition with no human review.\n");
+        }
+        sb.Append('\n');
+
+        sb.Append("### Task\n\n");
+        sb.Append("1. Transcribe the audio in **English**. If the meeting was held in another\n");
+        sb.Append("   language, translate it into English and say which language it was.\n");
+        sb.Append("2. Align the speech to the speaker rows above **by time**. A row's `start`\n");
+        sb.Append("   and `end` bound that speaker's turn, so speech inside that range is\n");
+        sb.Append("   theirs. Do not invent speaker changes the table does not show.\n");
+        sb.Append("3. Give a passage that straddles two rows to the row it overlaps most.\n");
+        sb.Append("   Where the table and your own read of the voices disagree, follow the\n");
+        sb.Append("   table — it is a person's live record, and it is the point of this file.\n");
+        sb.Append("4. Speech inside a `## Gaps` range has no marked speaker. File it under\n");
+        sb.Append("   \"Unmarked\" rather than guessing who was talking.\n");
+        sb.Append("5. Write every timestamp in the same `HH:MM:SS.mmm` form and on the same\n");
+        sb.Append("   timebase as this file, so both files can be read side by side.\n\n");
+
+        sb.Append("### Output — `transcript.md`\n\n");
+        sb.Append("Write these four sections, in this order:\n\n");
+        sb.Append("1. `## Full Transcript` — the verbatim English transcript in chronological\n");
+        sb.Append("   order, one block per speaker turn, each headed with the same mark number,\n");
+        sb.Append("   speaker id, name and time range this file uses. This is the record of\n");
+        sb.Append("   what was actually said: do not summarise or condense it. Removing pure\n");
+        sb.Append("   filler (\"um\", false starts) is the only editing allowed.\n");
+        sb.Append("2. `## Executive Summary` — the whole meeting in a few paragraphs of\n");
+        sb.Append("   English: what it was about, what was decided, what is still open, and\n");
+        sb.Append("   every owner and deadline that was named.\n");
+        sb.Append("3. `## Key Points by Speaker` — one English subsection per speaker, giving\n");
+        sb.Append("   that person's main points, positions, commitments and open questions.\n");
+        sb.Append("4. `## 한국어 리포트` — sections 2 and 3 again in Korean, as\n");
+        sb.Append("   `### 전체 회의 요약` and `### 화자별 핵심 내용`. Translate the meaning\n");
+        sb.Append("   rather than word for word, and leave names, product names and figures as\n");
+        sb.Append("   they were spoken.\n\n");
+
+        sb.Append("Ground every statement in the audio. Where it is unclear, write\n");
+        sb.Append("`[inaudible HH:MM:SS.mmm]` instead of guessing, and never add a decision,\n");
+        sb.Append("number, owner or deadline that nobody said.\n");
     }
 
     /// <summary>
