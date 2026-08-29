@@ -33,10 +33,15 @@ public sealed class RecordingWindow : ShellWindow
     /// timecode, the tiles' legibility or the Stop button — it is paid for
     /// out of the live waveform's slack and the collapsed dock's chrome, and
     /// the numbers live together here so that stays checkable.
+    ///
+    /// The three wave heights are the same 1.5x scale-up of one another
+    /// throughout — compact and expanded stay proportionally smaller than
+    /// tall — so the tile grid's own scroller is what absorbs the extra
+    /// height rather than the timecode or the dock.
     /// </summary>
-    private const double TallWaveHeight = 132;
-    private const double CompactWaveHeight = 108;
-    private const double ExpandedWaveHeight = 72;
+    private const double TallWaveHeight = 198;
+    private const double CompactWaveHeight = 162;
+    private const double ExpandedWaveHeight = 108;
     private const double CollapsedDockHeight = 232;
     private const double CompactCollapsedDockHeight = 150;
     private const double ExpandedDockHeight = 380;
