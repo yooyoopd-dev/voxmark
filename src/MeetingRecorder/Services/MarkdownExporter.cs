@@ -384,6 +384,66 @@ public static class MarkdownExporter
     }
 
     /// <summary>
+    /// The recognised words, grouped under the speaker they were attributed
+    /// to. Additive to the section 10 contract rather than a change to it:
+    /// the segments table and the Gaps table above are untouched, so a reader
+    /// that only knows the original format loses nothing, and one that reads
+    /// this gets the transcript already split by speaker.
+    ///
+    /// Nothing is written at all when no speech was recognised, so a session
+    /// recorded without transcription produces exactly the file it used to.
+    /// </summary>
+    private static void AppendTranscript(StringBuilder sb, RecordingSession session,
+                                         IReadOnlyList<Mark> marks, IReadOnlyList<TranscriptSegment> segments,
+                                         IReadOnlyDictionary<long, int> numbers)
+    {
+        var blocks = TranscriptMapper.Blocks(segments, marks);
+        if (blocks.Count == 0) return;
+
+        sb.Append("\n## Transcript\n\n");
+        sb.Append("Recognised speech in chronological order, grouped by the speaker mark it\n");
+        sb.Append("falls in. Times are on the same timebase as the table above. Text under\n");
+        sb.Append("\"unmarked\" was spoken while no speaker was marked — transcribe it, but\n");
+        sb.Append("attribute it with care.\n\n");
+
+        foreach (var block in blocks)
+        {
+            var text = block.Text;
+            if (text.Length == 0) continue;
+
+            sb.Append("### ");
+            if (block.Mark is { } mark)
+            {
+                var speaker = session.SpeakerForSlot(mark.SpeakerSlot);
+                sb.Append(numbers.TryGetValue(mark.Id, out var number) ? number : 0)
+                  .Append(" · ").Append(speaker?.Id ?? "S?")
+                  .Append(" · ").Append(speaker?.Name ?? "Unknown");
+            }
+            else
+            {
+                sb.Append("— · unmarked");
+            }
+
+            // A marked block's header is the mark's own start/end — the same
+            // field the table above prints — so the two sections agree by
+            // construction rather than by two independently-derived numbers
+            // that can drift apart. Whisper's segment boundaries follow its
+            // own decoding, not the speaker changes, so the *words'* actual
+            // audio span (block.StartSeconds/EndSeconds) can legitimately
+            // extend past the mark either way; that's still true and still
+            // the right span for the recognised text, it's just not what
+            // belongs in a header meant to say "this is mark N's turn."
+            // Unmarked blocks have no mark to match, so they keep the
+            // segment-derived span — the only honest source there.
+            var headerStart = block.Mark?.StartSeconds ?? block.StartSeconds;
+            var headerEnd = block.Mark?.EndSeconds ?? block.EndSeconds;
+            sb.Append(" — ").Append(Timestamp(headerStart))
+              .Append(" → ").Append(Timestamp(headerEnd)).Append("\n\n");
+            sb.Append(text).Append("\n\n");
+        }
+    }
+
+    /// <summary>
     /// A mark cut down to the span that actually falls inside one part. The
     /// clone keeps the original id so a turn spanning a boundary carries the
     /// same number in both files.
