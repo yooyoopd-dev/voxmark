@@ -13,11 +13,11 @@ public static class AppPaths
 
     /// <summary>
     /// Where session folders are created. Defaults to Documents\VoxMark\
-    /// Sessions; settable from Setup ("Save recordings to") when that
+    /// Sessions; settable from Settings ("Save recordings to") when that
     /// default can't be used — most often a OneDrive-redirected Documents
     /// folder that intermittently fails to create directories — or simply
     /// preferred elsewhere. Read fresh from <see cref="AppSettingsStore"/>
-    /// every time rather than cached, so a change made in Setup is visible
+    /// every time rather than cached, so a change made in Settings is visible
     /// to the very next caller with no extra wiring.
     /// </summary>
     public static string SessionsRoot
@@ -31,7 +31,24 @@ public static class AppPaths
 
     public static string PresetsFile => Path.Combine(Root, "presets.json");
 
-    public static void EnsureCreated() => CreateDirectory(SessionsRoot);
+    /// <summary>
+    /// Create Documents\VoxMark\ itself. Every app-level file —
+    /// <c>presets.json</c>, <c>plans.json</c>, <c>transcription.json</c> —
+    /// lives here rather than under <see cref="SessionsRoot"/>, and once the
+    /// save location can be redirected the two are no longer the same
+    /// folder: creating only the sessions folder used to leave this one
+    /// missing, and the very next <c>plans.json</c> write threw
+    /// FileNotFoundException. Anything writing into <see cref="Root"/> calls
+    /// this, not <see cref="EnsureCreated"/>.
+    /// </summary>
+    public static void EnsureRoot() => CreateDirectory(Root);
+
+    /// <summary>Both folders — the app folder and the (possibly redirected) sessions folder.</summary>
+    public static void EnsureCreated()
+    {
+        EnsureRoot();
+        CreateDirectory(SessionsRoot);
+    }
 
     /// <summary>
     /// Directory.CreateDirectory, retried past a real Windows/OneDrive
@@ -74,6 +91,20 @@ public static class AppPaths
               "folder creation can fail like this — open OneDrive and let it finish syncing, " +
               "or pick a different save location under \"Save recordings to\" above."
             : "";
+
+    /// <summary>
+    /// Diagnostics from a failed folder creation, kept in memory for the
+    /// Settings screen's copyable Log. It lives here rather than on a window
+    /// because the failures worth reading happen at startup and on Setup,
+    /// but are read on Settings — a buffer that outlives all three is the
+    /// only place all of them can reach.
+    /// </summary>
+    private static readonly List<string> Notes = new();
+
+    public static IReadOnlyList<string> Diagnostics => Notes;
+
+    public static void Note(string message) =>
+        Notes.Add("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + message);
 
     /// <summary>"Weekly Product Review" → "weekly-product-review".</summary>
     public static string Slugify(string title)

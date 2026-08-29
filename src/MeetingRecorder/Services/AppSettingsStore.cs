@@ -4,9 +4,9 @@ using System.Text.Json;
 namespace MeetingRecorder.Services;
 
 /// <summary>
-/// App-level preferences that have to survive even when
-/// <c>Documents\VoxMark\</c> itself is unreachable — today, just where
-/// session folders are created. Deliberately stored under
+/// App-level preferences: the things an operator sets once on this PC
+/// rather than before every meeting — where session folders are created,
+/// and the recording defaults a new setup starts from. Deliberately stored under
 /// <c>%LocalAppData%\VoxMark\</c> rather than beside <c>presets.json</c> and
 /// the other <c>Documents\VoxMark\</c> files: LocalAppData is never
 /// cloud-redirected the way Documents can be, so the one setting that exists
@@ -23,6 +23,18 @@ public static class AppSettingsStore
         /// Documents\VoxMark\Sessions. Empty means "use the default".
         /// </summary>
         public string SessionsRoot { get; set; } = "";
+
+        /// <summary>
+        /// The mark-start offset a new setup begins with. It calibrates how
+        /// long this operator takes to react, not what kind of meeting this
+        /// is, so it belongs to the PC. Defaults match
+        /// <see cref="MeetingRecorder.Models.SessionOptions"/> so a settings.json written
+        /// before these keys existed round-trips unchanged.
+        /// </summary>
+        public double MarkStartOffsetSeconds { get; set; } = 0.8;
+
+        /// <summary>The MP3 bitrate a new setup begins with.</summary>
+        public int Mp3BitrateKbps { get; set; } = 128;
     }
 
     private static string Path => System.IO.Path.Combine(

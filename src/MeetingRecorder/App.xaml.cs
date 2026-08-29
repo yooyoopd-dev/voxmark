@@ -21,14 +21,36 @@ public partial class App : Application
         // ShellWindow.
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+        // The two folders are created independently on purpose. They used to
+        // be one call, and a save location pointed somewhere unreachable took
+        // Documents\VoxMark\ down with it — leaving plans.json and
+        // presets.json with nowhere to be written. Neither failure blocks
+        // startup; both are noted for the Settings screen's Log.
         try
         {
-            AppPaths.EnsureCreated();
+            AppPaths.EnsureRoot();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // A missing Documents folder is reported by the first save
-            // instead of blocking startup.
+            AppPaths.Note("Could not create the app folder \"" + AppPaths.Root + "\".\n" +
+                          ex.Message + "\n" + AppPaths.OneDriveHint(AppPaths.Root));
+        }
+
+        try
+        {
+            AppPaths.CreateDirectory(AppPaths.SessionsRoot);
+        }
+        catch (Exception ex)
+        {
+            // Deliberately not cleared: an external drive that is merely
+            // unplugged today should still be the configured location
+            // tomorrow. Settings shows this note next to the Reset button so
+            // the operator decides.
+            AppPaths.Note("The saved recording location \"" + AppPaths.SessionsRoot +
+                          "\" could not be created.\n" + ex.Message + "\n" +
+                          AppPaths.OneDriveHint(AppPaths.SessionsRoot) +
+                          "\nUse Settings → Save recordings to → Reset to go back to " +
+                          "Documents\\VoxMark\\Sessions.");
         }
 
         new LibraryWindow().Show();

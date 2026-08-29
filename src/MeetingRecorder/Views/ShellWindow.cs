@@ -21,8 +21,13 @@ public abstract class ShellWindow : Window
     protected ShellWindow(string title, double width, double height)
     {
         Title = title;
-        Width = width;
-        Height = height;
+
+        // Clamp to the monitor rather than trusting the requested size: these
+        // screens are laid out for a roomy window, and a 1366×768 laptop would
+        // otherwise get a window taller than its desktop, with the footer —
+        // and Start recording with it — off the bottom edge.
+        Width = Math.Min(width, SystemParameters.WorkArea.Width);
+        Height = Math.Min(height, SystemParameters.WorkArea.Height);
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.CanResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;

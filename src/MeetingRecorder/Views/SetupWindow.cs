@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -38,14 +37,13 @@ public sealed class SetupWindow : ShellWindow
     private readonly TextBlock _levelStatus;
     private readonly TextBlock _diskText;
     private readonly TextBlock _sessionsRootText;
-    private readonly TextBox _log;
-    private readonly Button _copyLogButton;
+    private readonly TextBlock _offsetText;
     private readonly StackPanel _rosterPanel = new();
     private readonly WrapPanel _presetChips = new();
     private readonly TextBlock _rosterHeading;
     private readonly TextBlock _folderPreview;
+    private readonly TextBlock _formatText;
     private readonly CheckBox _overlapToggle;
-    private readonly Dropdown _offset;
     private readonly Dropdown _split;
 #if !VOXMARK_LITE
     private readonly CheckBox _transcribeToggle;
@@ -53,6 +51,7 @@ public sealed class SetupWindow : ShellWindow
     private readonly TextBlock _transcribeStatus;
 #endif
 
+    private Button? _updateButton;
     private List<Preset> _presets = new();
     private RosterRow? _capturingRow;
     private RosterRow? _dragSource;
@@ -68,10 +67,13 @@ public sealed class SetupWindow : ShellWindow
     /// that can still be edited before Start.
     /// </summary>
     public SetupWindow(MeetingPlan? plan = null)
-        : base(plan is null ? "New meeting — setup" : "Setup — " + plan.Title, 1320, 820)
+        : base(plan is null ? "New meeting — setup" : "Setup — " + plan.Title, 1320, 900)
     {
         MinWidth = 1060;
-        MinHeight = 700;
+        // Clamped for the same reason ShellWindow clamps the requested size —
+        // a minimum taller than the desktop is a window whose footer cannot be
+        // reached at all.
+        MinHeight = Math.Min(760, SystemParameters.WorkArea.Height);
 
         _title = Field(plan?.Title ?? "Weekly Product Review", 15);
         _room = Field(plan?.Room ?? "", 14);
@@ -106,42 +108,21 @@ public sealed class SetupWindow : ShellWindow
         _rosterHeading = Ui.Section("Roster · 0");
         _folderPreview = Ui.Mono("—", 12, Palette.TextBodyBrush);
 
+        // Read-only echoes of values that now live in Settings. They stay on
+        // this screen because nobody should press Start without knowing where
+        // the recording lands or how far marks are shifted — but they are a
+        // line of text and a link, not a folder picker and a diagnostics pane
+        // in the middle of the pre-flight check.
         _sessionsRootText = Ui.Mono("—", 12, Palette.TextBodyBrush);
-        _sessionsRootText.MaxWidth = 220;
         _sessionsRootText.TextTrimming = TextTrimming.CharacterEllipsis;
 
-        _log = new TextBox
-        {
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            AcceptsReturn = true,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            FontFamily = Ui.MonoFont,
-            FontSize = 11.5,
-            Foreground = Palette.TextMutedBrush,
-            Height = 90,
-            Text = "No issues yet",
-        };
-        _copyLogButton = Ui.MakeButton("Copy", null, "GhostButton", (_, _) =>
-        {
-            if (_log.Text.Length > 0) Clipboard.SetText(_log.Text);
-        });
+        _offsetText = Ui.Mono("—", 12.5, Palette.AccentTextBrush);
+        _formatText = Ui.Mono("—", 12.5, Palette.AccentTextBrush);
 
         _overlapToggle = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
         if (TryFindResource("ToggleSwitch") is Style toggle) _overlapToggle.Style = toggle;
         _overlapToggle.Checked += (_, _) => _options.AllowOverlappingMarks = true;
         _overlapToggle.Unchecked += (_, _) => _options.AllowOverlappingMarks = false;
-
-        _offset = new Dropdown("ChipButton") { MinHeight = 26 };
-        _offset.SetItems(new (string, object)[]
-        {
-            ("−0.0 s", 0.0), ("−0.4 s", 0.4), ("−0.8 s", 0.8), ("−1.2 s", 1.2), ("−1.6 s", 1.6),
-        });
-        _offset.SelectionChanged += value =>
-        {
-            if (value is double seconds) _options.MarkStartOffsetSeconds = seconds;
-        };
 
         _split = new Dropdown("ChipButton") { MinHeight = 26 };
         _split.SetItems(new (string, object)[]
@@ -156,6 +137,12 @@ public sealed class SetupWindow : ShellWindow
             if (value is int minutes) _options.SplitMinutes = minutes;
         };
 
+        // The app-wide defaults a new meeting starts from. A saved plan still
+        // wins over them below — it records what it was saved with.
+        var appDefaults = AppSettingsStore.Load();
+        _options.MarkStartOffsetSeconds = appDefaults.MarkStartOffsetSeconds;
+        _options.Mp3BitrateKbps = appDefaults.Mp3BitrateKbps;
+
 #if !VOXMARK_LITE
         // Remembered across meetings: choosing a model is setup, and being
         // asked for it again before every meeting would be a chore rather
@@ -166,8 +153,7 @@ public sealed class SetupWindow : ShellWindow
         _options.TranscriptionLanguage = transcription.Language;
         _transcriptionPreferred = transcription.Enabled;
 
-        _modelName = Ui.Mono("—", 12, Palette.TextBodyBrush);
-        _modelName.MaxWidth = 220;
+        _modelName = Ui.Mono("—", 12.5, Palette.AccentTextBrush);
         _modelName.TextTrimming = TextTrimming.CharacterEllipsis;
         _transcribeStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
 
@@ -195,8 +181,6 @@ public sealed class SetupWindow : ShellWindow
         }
 
         _overlapToggle.IsChecked = _options.AllowOverlappingMarks;
-        _offset.Select(_options.MarkStartOffsetSeconds);
-        _offset.DisplayText = "−" + _options.MarkStartOffsetSeconds.ToString("0.0") + " s";
         _split.Select(_options.SplitMinutes);
         _split.DisplayText = _options.SplitMinutes > 0
             ? "Every " + _options.SplitMinutes + " min"
@@ -204,6 +188,7 @@ public sealed class SetupWindow : ShellWindow
 
         SetBody(BuildBody());
 
+        RefreshEchoes();
         LoadDevices();
         LoadPresets();
         SeedRoster();
@@ -234,18 +219,20 @@ public sealed class SetupWindow : ShellWindow
 
     private UIElement BuildBody()
     {
+        // The padding is a Border inside each pane, not ScrollViewer.Padding:
+        // that padding sits outside the scroll extent, so its bottom edge can
+        // never be scrolled to. With a tall left pane that cost the last 20px
+        // of the last card permanently — the reported "the Log is cut off".
         var left = new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Padding = new Thickness(20),
-            Content = BuildLeftPane(),
+            Content = new Border { Padding = new Thickness(20), Child = BuildLeftPane() },
         };
 
         var right = new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Padding = new Thickness(20),
-            Content = BuildRightPane(),
+            Content = new Border { Padding = new Thickness(20), Child = BuildRightPane() },
         };
 
         var divider = new Border
@@ -328,24 +315,14 @@ public sealed class SetupWindow : ShellWindow
             _diskText);
         diskRow.Margin = new Thickness(0, 10, 0, 0);
 
-        var browseSave = Ui.MakeButton("Browse…", null, "ChipButton", (_, _) => BrowseForSaveFolder());
-        browseSave.Margin = new Thickness(8, 0, 0, 0);
-        var resetSave = Ui.MakeButton("Reset", null, "LinkButton", (_, _) => ResetSaveFolder());
-        resetSave.Margin = new Thickness(6, 0, 0, 0);
+        var saveToLabel = Ui.Text("Saving to", 12.5, Palette.TextBodyBrush);
+        saveToLabel.Margin = new Thickness(0, 0, 10, 0);
 
         var saveToRow = Ui.Columns(1,
-            Ui.Text("Save recordings to", 12.5, Palette.TextBodyBrush),
-            Ui.Filler(),
+            saveToLabel,
             _sessionsRootText,
-            browseSave,
-            resetSave);
+            SettingsLink());
         saveToRow.Margin = new Thickness(0, 10, 0, 0);
-
-        var saveToNote = Ui.Wrap(
-            "Sessions already saved under a previous location won't move or show up in the " +
-            "Library after switching — this redirects new meetings, it doesn't migrate old ones.",
-            11, Palette.TextMutedBrush);
-        saveToNote.Margin = new Thickness(0, 4, 0, 0);
 
         var inputCard = Ui.Card(Ui.Vertical(10,
             deviceRow,
@@ -353,18 +330,7 @@ public sealed class SetupWindow : ShellWindow
             scale,
             Ui.Rule(),
             saveToRow,
-            saveToNote,
             diskRow), new Thickness(13));
-
-        var logHeader = Ui.Columns(1,
-            Ui.Text("Diagnostics from a failed save-folder creation appear here, copyable.",
-                11.5, Palette.TextMutedBrush),
-            Ui.Filler(),
-            _copyLogButton);
-
-        var logCard = Ui.Card(Ui.Vertical(8,
-            logHeader,
-            Ui.Well(_log, new Thickness(8), 6)), new Thickness(13));
 
         return Ui.Vertical(0,
             WithMargin(Ui.Section("Meeting"), 0, 0, 0, 10),
@@ -373,9 +339,57 @@ public sealed class SetupWindow : ShellWindow
             WithMargin(presetHeader, 0, 0, 0, 10),
             WithMargin(_presetChips, 0, 0, 0, 20),
             WithMargin(Ui.Section("Input check"), 0, 0, 0, 10),
-            WithMargin(inputCard, 0, 0, 0, 20),
-            WithMargin(Ui.Section("Log"), 0, 0, 0, 10),
-            logCard);
+            inputCard);
+    }
+
+    /// <summary>
+    /// The "· Settings" affordance beside every value this screen only echoes.
+    /// Reopening the setup state afterwards is what keeps the echoes honest.
+    /// </summary>
+    private Button SettingsLink()
+    {
+        var link = Ui.MakeButton("Settings", null, "LinkButton", (_, _) => OpenSettings());
+        link.Margin = new Thickness(8, 0, 0, 0);
+        return link;
+    }
+
+    private void OpenSettings()
+    {
+        new SettingsWindow { Owner = this }.ShowDialog();
+
+        // Nothing here overwrites a value the operator already changed for
+        // this meeting: RefreshAppDefaults only re-reads what this screen
+        // does not let them edit.
+        RefreshAppDefaults();
+        UpdateDisk();
+        UpdateFolderPreview();
+#if !VOXMARK_LITE
+        var speech = TranscriptionSettingsStore.Load();
+        _options.WhisperModelPath = speech.ModelPath;
+        _options.TranscriptionLanguage = speech.Language;
+        RefreshTranscriptionState();
+#endif
+    }
+
+    /// <summary>
+    /// Adopt the app-wide recording defaults. Called when the operator comes
+    /// back from Settings, where they just chose them deliberately — not on
+    /// load, where a plan opened from the library must keep the values it was
+    /// saved with.
+    /// </summary>
+    private void RefreshAppDefaults()
+    {
+        var defaults = AppSettingsStore.Load();
+        _options.MarkStartOffsetSeconds = defaults.MarkStartOffsetSeconds;
+        _options.Mp3BitrateKbps = defaults.Mp3BitrateKbps;
+        RefreshEchoes();
+    }
+
+    /// <summary>Show what this session will actually use, whatever set it.</summary>
+    private void RefreshEchoes()
+    {
+        _offsetText.Text = "−" + _options.MarkStartOffsetSeconds.ToString("0.0") + " s";
+        _formatText.Text = "MP3 · " + _options.Mp3BitrateKbps + " kbps · 44.1 kHz mono";
     }
 
     private UIElement BuildRightPane()
@@ -396,7 +410,8 @@ public sealed class SetupWindow : ShellWindow
         var format = Ui.Columns(1,
             Ui.Text("Format", 13.5, Palette.TextBrush),
             Ui.Filler(),
-            Ui.Mono("MP3 · 128 kbps · 44.1 kHz mono", 12.5, Palette.AccentTextBrush));
+            _formatText,
+            SettingsLink());
 
         var overlap = Ui.Columns(1,
             Ui.Text("Allow overlapping marks", 13.5, Palette.TextBrush),
@@ -406,7 +421,8 @@ public sealed class SetupWindow : ShellWindow
         var offsetRow = Ui.Columns(1,
             Ui.Text("Mark start offset", 13.5, Palette.TextBrush),
             Ui.Filler(),
-            _offset);
+            _offsetText,
+            SettingsLink());
 
         var splitRow = Ui.Columns(1,
             Ui.Text("Split recording", 13.5, Palette.TextBrush),
@@ -425,9 +441,6 @@ public sealed class SetupWindow : ShellWindow
         };
 
 #if !VOXMARK_LITE
-        var browse = Ui.MakeButton("Browse", null, "ChipButton", (_, _) => BrowseForModel());
-        browse.Margin = new Thickness(8, 0, 0, 0);
-
         optionRows.Add(Ui.Rule());
         optionRows.Add(Pad(Ui.Columns(1,
             Ui.Text("Live transcription", 13.5, Palette.TextBrush),
@@ -437,7 +450,7 @@ public sealed class SetupWindow : ShellWindow
             Ui.Text("Speech model", 12.5, Palette.TextDimBrush),
             Ui.Filler(),
             _modelName,
-            browse), 4));
+            SettingsLink()), 4));
         optionRows.Add(Pad(_transcribeStatus, 4));
 #endif
 
@@ -446,12 +459,13 @@ public sealed class SetupWindow : ShellWindow
         var offsetNote = Ui.Wrap(
             "A human presses the key after the speaker has already begun, so every mark start is shifted back " +
             "by the offset automatically; the raw press time is kept in the log so it can be re-tuned later. " +
+            "The offset and the bitrate are set once for this PC under Settings. " +
             "Splitting rolls to a new MP3 on the chosen interval and writes a matching Markdown for each one — " +
             "timestamps keep counting from the first file, so they mean the same thing in every chunk."
 #if !VOXMARK_LITE
             + " Live transcription recognises speech on this PC and maps the words onto your speaker " +
-            "marks in the exported Markdown. The model is a file you supply — VoxMark never downloads " +
-            "one and makes no network calls."
+            "marks in the exported Markdown. Which model file to use is a Settings choice; whether " +
+            "this meeting transcribes is the toggle above."
 #endif
             ,
             11.5, Palette.TextMutedBrush);
@@ -478,6 +492,15 @@ public sealed class SetupWindow : ShellWindow
         saveSetup.MinHeight = 40;
         saveSetup.Margin = new Thickness(0, 0, 10, 0);
 
+        // Only ever shown for a setup opened from the library: with nothing to
+        // update, an "Update saved" button is a question the operator cannot
+        // answer.
+        var update = Ui.MakeButton("Update saved", null, "GhostButton", (_, _) => UpdateSetup());
+        update.MinHeight = 40;
+        update.Margin = new Thickness(0, 0, 10, 0);
+        _updateButton = update;
+        ShowUpdateButton();
+
         var back = Ui.MakeButton("← Back", null, "GhostButton", (_, _) => GoBack());
         back.MinHeight = 40;
         back.Margin = new Thickness(0, 0, 14, 0);
@@ -492,6 +515,7 @@ public sealed class SetupWindow : ShellWindow
             back,
             Ui.Text("Session folder", 12.5, Palette.TextMutedBrush),
             _folderPreview,
+            update,
             saveSetup,
             savePreset,
             start);
@@ -889,60 +913,17 @@ public sealed class SetupWindow : ShellWindow
     }
 
     /// <summary>
-    /// Point new sessions at a folder the operator picks. Write-probed
-    /// through the same retrying create as an actual session folder would
-    /// get, so a folder that turns out to be just as broken as the default
-    /// is reported here — with the full diagnostic in the Log — rather than
-    /// silently accepted and only discovered at Start.
+    /// The whole diagnostic goes to the Settings Log; the status line here
+    /// gets its first line, because a stack of paths and HResults on a
+    /// one-line status is unreadable exactly when it matters.
     /// </summary>
-    private void BrowseForSaveFolder()
+    private void NoteFailure(string message, Exception ex)
     {
-        var dialog = new Microsoft.Win32.OpenFolderDialog
-        {
-            Title = "Choose where VoxMark saves recordings",
-        };
+        AppPaths.Note(message + "\n" + FormatException(ex));
 
-        try
-        {
-            if (Directory.Exists(AppPaths.SessionsRoot)) dialog.InitialDirectory = AppPaths.SessionsRoot;
-        }
-        catch (Exception)
-        {
-            // An unreadable current folder is not worth failing the dialog over.
-        }
-
-        if (dialog.ShowDialog(this) != true) return;
-
-        var chosen = dialog.FolderName;
-        try
-        {
-            AppPaths.CreateDirectory(chosen);
-        }
-        catch (Exception ex)
-        {
-            var hint = AppPaths.OneDriveHint(chosen);
-            AppendLog("Could not use \"" + chosen + "\" as the save location.\n" + FormatException(ex) +
-                      (hint.Length > 0 ? "\n" + hint : ""));
-            return;
-        }
-
-        AppSettingsStore.Save(new AppSettingsStore.Settings { SessionsRoot = chosen });
-        UpdateDisk();
-    }
-
-    private void ResetSaveFolder()
-    {
-        AppSettingsStore.Save(new AppSettingsStore.Settings { SessionsRoot = "" });
-        UpdateDisk();
-    }
-
-    /// <summary>Append one timestamped, copyable entry to the Log area.</summary>
-    private void AppendLog(string message)
-    {
-        var entry = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + message;
-        _log.Text = _log.Text == "No issues yet" ? entry : _log.Text + "\n\n" + entry;
-        _log.CaretIndex = _log.Text.Length;
-        _log.ScrollToEnd();
+        var firstLine = message.Split('\n')[0];
+        _levelStatus.Text = firstLine + " See Settings → Log.";
+        _levelStatus.Foreground = Palette.RecBrush;
     }
 
     /// <summary>The full exception chain — type, message, HResult — for a copyable diagnostic.</summary>
@@ -999,8 +980,8 @@ public sealed class SetupWindow : ShellWindow
             {
                 if (_managingPresets)
                 {
-                    _presets = PresetStore.Remove(captured.Name);
-                    RebuildPresetChips(true);
+                    if (TryStore(() => _presets = PresetStore.Remove(captured.Name),
+                                 "Could not forget that preset")) RebuildPresetChips(true);
                 }
                 else
                 {
@@ -1027,9 +1008,34 @@ public sealed class SetupWindow : ShellWindow
         if (named.Count == 0) return;
 
         var name = string.IsNullOrWhiteSpace(_title.Text) ? "Preset" : _title.Text.Trim();
-        _presets = PresetStore.Upsert(name, named);
+        if (!TryStore(() => _presets = PresetStore.Upsert(name, named), "Could not save the preset")) return;
+
         _managingPresets = false;
         RebuildPresetChips(false);
+    }
+
+    /// <summary>
+    /// Run a write into Documents\VoxMark\ and report a failure on the status
+    /// line instead of letting it reach the dispatcher. These run from click
+    /// handlers, where an unhandled exception is not an error message but a
+    /// closed app.
+    /// </summary>
+    private bool TryStore(Action write, string whatFailed)
+    {
+        try
+        {
+            write();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppPaths.Note(whatFailed + " (" + AppPaths.Root + ").\n" +
+                          ex.GetType().Name + ": " + ex.Message + "\n" +
+                          AppPaths.OneDriveHint(AppPaths.Root));
+            _levelStatus.Text = whatFailed + " — " + ex.Message + " See Settings → Log.";
+            _levelStatus.Foreground = Palette.RecBrush;
+            return false;
+        }
     }
 
     // --------------------------------------------------------------- start
@@ -1150,35 +1156,6 @@ public sealed class SetupWindow : ShellWindow
         _transcribeStatus.Foreground = Palette.TextMutedBrush;
     }
 
-    /// <summary>Pick a model file by hand, for anyone not using the Models folder.</summary>
-    private void BrowseForModel()
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Choose a whisper speech model",
-            Filter = "Whisper ggml model (*.bin)|*.bin|All files (*.*)|*.*",
-            CheckFileExists = true,
-        };
-
-        try
-        {
-            if (Directory.Exists(WhisperRuntime.ModelsFolder))
-            {
-                dialog.InitialDirectory = WhisperRuntime.ModelsFolder;
-            }
-        }
-        catch (Exception)
-        {
-            // An unreadable folder is not worth failing the dialog over.
-        }
-
-        if (dialog.ShowDialog(this) != true) return;
-
-        _options.WhisperModelPath = dialog.FileName;
-        RememberTranscription();
-        RefreshTranscriptionState();
-    }
-
     private void RememberTranscription() => TranscriptionSettingsStore.Save(new TranscriptionSettingsStore.Settings
     {
         ModelPath = _options.WhisperModelPath,
@@ -1187,11 +1164,54 @@ public sealed class SetupWindow : ShellWindow
     });
 #endif
 
-    /// <summary>Save the whole meeting — title, time, room, roster, options — for later.</summary>
-    private void SaveSetup()
+    /// <summary>
+    /// Save the whole meeting — title, time, room, roster, options — for
+    /// later, as a new entry every time. Re-saving used to replace the entry
+    /// the first save created, which meant an operator preparing three
+    /// variants of the same meeting ended up with one; keeping the id is now
+    /// the explicit "Update saved" button instead, shown only when there is
+    /// an opened setup to update.
+    /// </summary>
+    private void SaveSetup() => WritePlan(BuildPlan(), "Setup saved — a new entry is waiting in the library");
+
+    /// <summary>Replace the setup this screen was opened from, in place.</summary>
+    private void UpdateSetup()
+    {
+        var plan = BuildPlan();
+        plan.Id = _planId;
+        WritePlan(plan, "Saved setup updated");
+    }
+
+    private void WritePlan(MeetingPlan plan, string success)
+    {
+        try
+        {
+            PlanStore.Upsert(plan);
+            _planId = plan.Id;
+            SetTitle("Setup — " + plan.Title);
+            ShowUpdateButton();
+            _levelStatus.Text = success;
+            _levelStatus.Foreground = Palette.GoodBrush;
+        }
+        catch (Exception ex)
+        {
+            NoteFailure("Could not save the setup to \"" + AppPaths.Root + "\".\n" +
+                        AppPaths.OneDriveHint(AppPaths.Root), ex);
+        }
+    }
+
+    private void ShowUpdateButton()
+    {
+        if (_updateButton is not null)
+        {
+            _updateButton.Visibility = _planId.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    private MeetingPlan BuildPlan()
     {
         var title = string.IsNullOrWhiteSpace(_title.Text) ? "New meeting" : _title.Text.Trim();
-        var plan = new MeetingPlan
+        return new MeetingPlan
         {
             Title = title,
             Room = _room.Text.Trim(),
@@ -1212,23 +1232,6 @@ public sealed class SetupWindow : ShellWindow
 #endif
             },
         };
-        // Re-saving an opened plan updates it in place instead of piling up
-        // near-identical copies in the library.
-        if (!string.IsNullOrEmpty(_planId)) plan.Id = _planId;
-
-        try
-        {
-            PlanStore.Upsert(plan);
-            _planId = plan.Id;
-            SetTitle("Setup — " + title);
-            _levelStatus.Text = "Setup saved — it is waiting in the library";
-            _levelStatus.Foreground = Palette.GoodBrush;
-        }
-        catch (Exception ex)
-        {
-            _levelStatus.Text = "Could not save the setup — " + ex.Message;
-            _levelStatus.Foreground = Palette.RecBrush;
-        }
     }
 
     private void GoBack()
@@ -1277,15 +1280,11 @@ public sealed class SetupWindow : ShellWindow
         }
         catch (Exception ex)
         {
-            _levelStatus.Text = "Could not create the session folder — " + ex.Message;
-            _levelStatus.Foreground = Palette.RecBrush;
-
             var folder = AppPaths.SessionsRoot;
             var hint = AppPaths.OneDriveHint(folder);
-            AppendLog("Could not create the session folder under \"" + folder + "\".\n" +
-                      FormatException(ex) +
-                      (hint.Length > 0 ? "\n" + hint : "") +
-                      "\nYou can pick a different folder under \"Save recordings to\" above.");
+            NoteFailure("Could not create the session folder under \"" + folder + "\"." +
+                        (hint.Length > 0 ? "\n" + hint : "") +
+                        "\nYou can pick a different folder under Settings → Save recordings to.", ex);
             return;
         }
 

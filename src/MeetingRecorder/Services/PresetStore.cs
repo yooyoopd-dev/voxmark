@@ -29,7 +29,7 @@ public static class PresetStore
 
     public static void Save(List<Preset> presets)
     {
-        AppPaths.EnsureCreated();
+        AppPaths.EnsureRoot();
         var temp = AppPaths.PresetsFile + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(presets, Json));
         File.Move(temp, AppPaths.PresetsFile, overwrite: true);

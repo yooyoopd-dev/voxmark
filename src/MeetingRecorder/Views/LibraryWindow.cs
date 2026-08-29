@@ -26,6 +26,7 @@ public sealed class LibraryWindow : ShellWindow
     private readonly StackPanel _plans = new();
     private readonly TextBlock _plansHeading;
     private readonly Border _plansSection;
+    private readonly TextBlock _notice;
 
     public LibraryWindow() : base("VoxMark", 1000, 720)
     {
@@ -36,10 +37,23 @@ public sealed class LibraryWindow : ShellWindow
             Ui.Text("Sessions", 24),
             Ui.Text(BuildProfile.Subtitle, 12.5, Palette.TextMutedBrush));
 
+        var settings = Ui.MakeButton("Settings", null, "GhostButton", (_, _) => OpenSettings());
+        settings.VerticalAlignment = VerticalAlignment.Bottom;
+        settings.Margin = new Thickness(0, 0, 10, 0);
+
         var newMeeting = Ui.MakeButton("＋ New meeting", null, "AccentButton", (_, _) => StartNewMeeting());
         newMeeting.VerticalAlignment = VerticalAlignment.Bottom;
 
-        var header = Ui.Columns(1, heading, Ui.Filler(), newMeeting);
+        var headerRow = Ui.Columns(1, heading, Ui.Filler(), settings, newMeeting);
+
+        // Anything that fails here fails on a click, with no status line to
+        // fall back on — before this, a store that could not write simply
+        // took the app down (see AppPaths.EnsureRoot).
+        _notice = Ui.Wrap("", 12.5, Palette.RecBrush);
+        _notice.Visibility = Visibility.Collapsed;
+        _notice.Margin = new Thickness(0, 10, 0, 0);
+
+        var header = Ui.Vertical(0, headerRow, _notice);
         header.Margin = new Thickness(0, 0, 0, 18);
 
         _plansHeading = Ui.Section("Ready to record · 0");
@@ -100,6 +114,24 @@ public sealed class LibraryWindow : ShellWindow
         var setup = new SetupWindow();
         setup.Show();
         Close();
+    }
+
+    /// <summary>
+    /// The machine-wide settings — save location, recording defaults, the
+    /// speech model, the diagnostics log. They belong to the PC rather than
+    /// to one meeting, so they live a click away from the library instead of
+    /// on the setup screen the operator walks through before every meeting.
+    /// </summary>
+    private void OpenSettings()
+    {
+        new SettingsWindow { Owner = this }.ShowDialog();
+        Reload();
+    }
+
+    private void ShowNotice(string message)
+    {
+        _notice.Text = message;
+        _notice.Visibility = message.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void Reload()
@@ -179,7 +211,20 @@ public sealed class LibraryWindow : ShellWindow
         var open = Ui.MakeButton("Open setup", null, "ChipButtonAccent", (_, _) => OpenPlan(plan));
         var remove = Ui.MakeButton("✕", null, "ChipButton", (_, _) =>
         {
-            PlanStore.Remove(plan.Id);
+            try
+            {
+                PlanStore.Remove(plan.Id);
+                ShowNotice("");
+            }
+            catch (Exception ex)
+            {
+                AppPaths.Note("Could not update \"" + AppPaths.Root + "\\plans.json\".\n" +
+                              ex.GetType().Name + ": " + ex.Message + "\n" +
+                              AppPaths.OneDriveHint(AppPaths.Root));
+                ShowNotice("Could not forget that setup — " + ex.Message +
+                           " See Settings → Log for the full diagnostic.");
+            }
+
             ReloadPlans();
         });
         remove.Foreground = Palette.TextMutedBrush;
