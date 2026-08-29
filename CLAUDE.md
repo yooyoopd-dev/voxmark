@@ -302,8 +302,33 @@ segments table and the `## Gaps` table are untouched; recognised speech goes
 into a new `## Transcript` section after them, and the two front-matter keys
 (`transcription`, `transcript_coverage`) are appended after the section 10
 keys rather than woven among them. A session recorded without transcription
-must still produce byte-for-byte the file it always did — that is the
-property to check first if you touch `MarkdownExporter`.
+still produces byte-for-byte the file it always did apart from the standing
+agent brief below — that is the property to check first if you touch
+`MarkdownExporter`.
+
+`## Agent Instructions` is the one section every export carries, transcript
+or not: the standing brief for the LLM the file is handed to, asking for a
+`transcript.md` holding the verbatim per-speaker transcript, an executive
+summary, per-speaker key points, and the same summary and key points again
+in Korean. It exists so the operator does not retype that prompt after every
+meeting. Like the transcript it is **additive** — last in the file, after
+the Notes, with only a one-line pointer under the title so it is not missed
+— and it is written in English whatever language the meeting was in, because
+it addresses the agent rather than the room. Changing what it asks for
+changes what every downstream agent produces, so treat its wording as
+interface, not prose.
+
+The brief **branches at read time, not at export time**, because the export
+cannot know what the agent will be handed — the MP3 does not always travel
+with the Markdown. So it names routes and lets the agent pick: audio present
+means transcribe it; audio absent with a `## Transcript` section present
+means skip the alignment step and write the report straight from that
+section, saying in the output that it came from unreviewed recognition;
+audio absent with no transcript means say so and stop, because a transcript
+built from speaker names and timings alone is invention. `hasTranscript` is
+therefore the only thing the exporter decides — it picks which Route B the
+file gets — and the split-session rule lives in the write-up step so it
+reaches both routes rather than only the transcribing one.
 
 Attribution rule, stated in the output itself: a segment goes to the mark it
 overlaps most. Whisper's boundaries follow its own decoding rather than the
