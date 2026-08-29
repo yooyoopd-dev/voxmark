@@ -194,9 +194,11 @@ public sealed class SettingsWindow : ShellWindow
     {
         var browse = Ui.MakeButton("Browse…", null, "ChipButton", (_, _) => BrowseForSaveFolder());
         browse.Margin = new Thickness(10, 0, 0, 0);
+        browse.VerticalAlignment = VerticalAlignment.Center;
 
         var reset = Ui.MakeButton("Reset", null, "LinkButton", (_, _) => ResetSaveFolder());
         reset.Margin = new Thickness(8, 0, 0, 0);
+        reset.VerticalAlignment = VerticalAlignment.Center;
 
         var pathRow = Ui.Columns(0, _sessionsRoot, browse, reset);
 
@@ -205,7 +207,6 @@ public sealed class SettingsWindow : ShellWindow
             "Library after switching — this redirects new meetings, it doesn't migrate old ones. " +
             "Reset goes back to Documents\\VoxMark\\Sessions.",
             11.5, Palette.TextMutedBrush);
-        note.Margin = new Thickness(0, 8, 0, 0);
 
         return Card(Ui.Vertical(8, pathRow, _disk, note));
     }
@@ -265,6 +266,7 @@ public sealed class SettingsWindow : ShellWindow
         {
             if (_log.Text.Length > 0) Clipboard.SetText(_log.Text);
         });
+        copy.VerticalAlignment = VerticalAlignment.Center;
 
         var header = Ui.Columns(0,
             Ui.Wrap("Diagnostics from a failed folder creation appear here, copyable.",
@@ -278,6 +280,7 @@ public sealed class SettingsWindow : ShellWindow
     {
         var reset = Ui.MakeButton("Reset app settings", null, "DangerButton", (_, _) => ResetEverything());
         reset.MinHeight = 36;
+        reset.HorizontalAlignment = HorizontalAlignment.Left;
 
         var note = Ui.Wrap(
             "Puts the save location, the offset and the bitrate back to their defaults. Your presets, " +
