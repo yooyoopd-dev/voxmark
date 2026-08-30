@@ -281,3 +281,5 @@ in [`CLAUDE.md`](CLAUDE.md) for the full list and the reasoning.
 ## For Whisper Model
 
 https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin.
+
+https://developer.nvidia.com/cuda-12-0-0-download-archive
