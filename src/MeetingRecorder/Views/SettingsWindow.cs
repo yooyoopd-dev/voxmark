@@ -37,6 +37,7 @@ public sealed class SettingsWindow : ShellWindow
     private readonly TextBlock _modelName;
     private readonly TextBlock _modelStatus;
     private readonly TextBlock _gpuStatus;
+    private readonly TextBlock _cudaPath;
     private readonly Dropdown _language;
 #endif
 
@@ -98,6 +99,8 @@ public sealed class SettingsWindow : ShellWindow
         _modelName.TextTrimming = TextTrimming.CharacterEllipsis;
         _modelStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
         _gpuStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
+        _cudaPath = Ui.Mono("—", 12.5, Palette.TextBodyBrush);
+        _cudaPath.TextTrimming = TextTrimming.CharacterEllipsis;
 
         _language = new Dropdown("ChipButton") { MinHeight = 26, PopupMinWidth = 160 };
         _language.SetItems(new (string, object)[]
@@ -251,15 +254,32 @@ public sealed class SettingsWindow : ShellWindow
             Ui.Filler(),
             _language);
 
+        var cudaBrowse = Ui.MakeButton("Browse…", null, "ChipButton", (_, _) => BrowseForCudaFolder());
+        cudaBrowse.Margin = new Thickness(10, 0, 0, 0);
+        cudaBrowse.VerticalAlignment = VerticalAlignment.Center;
+
+        var cudaReset = Ui.MakeButton("Reset", null, "LinkButton", (_, _) => ResetCudaFolder());
+        cudaReset.Margin = new Thickness(8, 0, 0, 0);
+        cudaReset.VerticalAlignment = VerticalAlignment.Center;
+
+        var cudaRow = Ui.Columns(0,
+            Ui.Vertical(2, Ui.Text("CUDA libraries", 13.5, Palette.TextBrush), _cudaPath),
+            cudaBrowse,
+            cudaReset);
+
         var note = Ui.Wrap(
             "The model is a file you supply — VoxMark never downloads one and makes no network calls. " +
             "Drop a ggml .bin into " + WhisperRuntime.ModelsFolder + " and it is found automatically. " +
-            "Whether a given meeting transcribes is still the toggle on the setup screen.",
+            "Whether a given meeting transcribes is still the toggle on the setup screen. " +
+            "The CUDA folder is only needed when NVIDIA's runtime is not installed on this PC: put " +
+            "cudart64_12.dll, cublas64_12.dll and cublasLt64_12.dll in it and speech runs on the GPU. " +
+            "They come to about 700 MB, so any drive will do — VoxMark only adds the folder to its " +
+            "own search path and writes nothing there.",
             11.5, Palette.TextMutedBrush);
         note.Margin = new Thickness(0, 10, 0, 0);
 
         return Card(Ui.Vertical(0, Pad(modelRow), Pad(_modelStatus, 4), Pad(_gpuStatus, 4),
-                                Ui.Rule(), Pad(languageRow), note));
+                                Ui.Rule(), Pad(languageRow), Ui.Rule(), Pad(cudaRow), note));
     }
 #endif
 
@@ -461,6 +481,58 @@ public sealed class SettingsWindow : ShellWindow
 
         _gpuStatus.Text = WhisperRuntime.GpuSummary(gpu);
         _gpuStatus.Foreground = slow is null ? Palette.TextMutedBrush : Palette.WarnBrush;
+
+        _cudaPath.Text = WhisperRuntime.CudaFolder + (WhisperRuntime.CudaFolderIsCustom ? "" : "  (default)");
+        _cudaPath.Foreground = Directory.Exists(WhisperRuntime.CudaFolder)
+            ? Palette.TextBodyBrush
+            : Palette.TextMutedBrush;
+    }
+
+    /// <summary>
+    /// Point the CUDA libraries somewhere else. Those three files are about
+    /// 700 MB, and a machine whose C: drive is tight has every reason to keep
+    /// them on another one — the same argument that made the save location
+    /// settable, and the same shape of control.
+    /// </summary>
+    private void BrowseForCudaFolder()
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Choose the folder holding the CUDA 12 libraries",
+        };
+
+        try
+        {
+            if (Directory.Exists(WhisperRuntime.CudaFolder)) dialog.InitialDirectory = WhisperRuntime.CudaFolder;
+        }
+        catch (Exception)
+        {
+            // An unreadable current folder is not worth failing the dialog over.
+        }
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        Speech(s => s.CudaPath = dialog.FolderName);
+
+        // On the search path immediately, so the status line below reports
+        // what the next recording will actually find rather than what the
+        // folder held when this window opened.
+        WhisperRuntime.UseCudaFolder();
+        RefreshModel();
+
+        var ready = WhisperRuntime.InspectGpu().CudaReady;
+        Say(ready
+            ? "Found the CUDA libraries — speech recognition will use the GPU."
+            : "Saved. That folder does not hold the three CUDA libraries yet — see the line above.",
+            ready ? Palette.GoodBrush : Palette.WarnBrush);
+    }
+
+    private void ResetCudaFolder()
+    {
+        Speech(s => s.CudaPath = "");
+        WhisperRuntime.UseCudaFolder();
+        RefreshModel();
+        Say("Back to " + WhisperRuntime.DefaultCudaFolder + ".", Palette.GoodBrush);
     }
 
     /// <summary>

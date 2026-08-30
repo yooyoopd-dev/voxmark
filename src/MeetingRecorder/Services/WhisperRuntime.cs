@@ -70,17 +70,18 @@ public static class WhisperRuntime
     /// </summary>
     public static string? Probe()
     {
+        // Ahead of the once-only work, and on every call: a machine with no
+        // CUDA toolkit can still run on the GPU if the operator keeps the
+        // libraries in a folder of their own, that folder has to be on the
+        // search path before whisper.cpp tries its CUDA backend, and it can
+        // be chosen in Settings long after the first probe.
+        UseCudaFolder();
+
         if (_probed) return _probeFailure;
         _probed = true;
 
         try
         {
-            // Before anything is loaded: a machine with no CUDA toolkit can
-            // still run on the GPU if the operator dropped the libraries into
-            // Documents\VoxMark\cuda, and that has to be on the search path
-            // before whisper.cpp tries its CUDA backend, not after.
-            AddCudaFolderToSearchPath();
-
             foreach (var root in CandidateRoots())
             {
                 // Either layout is enough to run: the CPU package lays its
@@ -272,12 +273,33 @@ public static class WhisperRuntime
     // ------------------------------------------------------------- the GPU
 
     /// <summary>
-    /// A folder the operator can drop the three CUDA libraries into, for a
-    /// machine where installing the CUDA toolkit is not an option — which is
-    /// the target machine here, behind a filtering proxy. Its contents are
-    /// put on the process's DLL search path before whisper is loaded.
+    /// Where the three CUDA libraries live when they did not come from an
+    /// installer — for a machine where running NVIDIA's installer is not an
+    /// option, which is the target machine here, behind a filtering proxy.
+    /// The folder's contents are put on the process's DLL search path before
+    /// whisper is loaded.
+    ///
+    /// Settable in Settings, and read fresh every time rather than cached, so
+    /// a change takes effect on the next probe with no extra wiring — the
+    /// same arrangement as <see cref="AppPaths.SessionsRoot"/>. The default is
+    /// under Documents, but those files are about 700 MB together, so a PC
+    /// with a tight C: drive can put them on another drive entirely.
     /// </summary>
-    public static string CudaFolder => Path.Combine(AppPaths.Root, "cuda");
+    public static string CudaFolder
+    {
+        get
+        {
+            var custom = TranscriptionSettingsStore.Load().CudaPath;
+            return string.IsNullOrWhiteSpace(custom) ? DefaultCudaFolder : custom.Trim();
+        }
+    }
+
+    /// <summary>Where the libraries are looked for when Settings names nowhere else.</summary>
+    public static string DefaultCudaFolder => Path.Combine(AppPaths.Root, "cuda");
+
+    /// <summary>True when the folder in use is the operator's own choice, not the default.</summary>
+    public static bool CudaFolderIsCustom =>
+        !string.Equals(CudaFolder, DefaultCudaFolder, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// What ggml's CUDA backend imports and what this build deliberately does
@@ -352,7 +374,8 @@ public static class WhisperRuntime
                "the GPU, so the live transcript lags further behind the room. The NVIDIA card is " +
                "there and this build carries the CUDA engine, but the CUDA 12 libraries it needs " +
                "are not on this machine (" + string.Join(", ", status.Missing) + "). Install the " +
-               "NVIDIA CUDA 12 runtime, or copy those files into " + CudaFolder + ".";
+               "NVIDIA CUDA 12 runtime, or put those files in " + CudaFolder +
+               " — Settings can point that somewhere else if this drive is short of room.";
     }
 
     /// <summary>
@@ -400,8 +423,14 @@ public static class WhisperRuntime
     {
         try
         {
+            // Only ever the default. A folder the operator picked already
+            // exists — they picked it — and creating a path from a settings
+            // file on a drive that may not be plugged in is not this
+            // method's business.
+            if (CudaFolderIsCustom) return;
+
             AppPaths.EnsureRoot();
-            Directory.CreateDirectory(CudaFolder);
+            Directory.CreateDirectory(DefaultCudaFolder);
         }
         catch (Exception)
         {
@@ -420,7 +449,7 @@ public static class WhisperRuntime
     /// <summary>
     /// Where Windows would find one of the CUDA libraries: beside the backend
     /// itself, in the drop-in folder, in a toolkit install, or on PATH. Same
-    /// order the loader uses once <see cref="AddCudaFolderToSearchPath"/> has
+    /// order the loader uses once <see cref="UseCudaFolder"/> has
     /// run, so a "found" here means the load will find it too.
     /// </summary>
     private static string? LocateLibrary(string fileName, string backendFolder)
@@ -457,23 +486,29 @@ public static class WhisperRuntime
 
     /// <summary>
     /// Put <see cref="CudaFolder"/> on the process's DLL search path, so
-    /// libraries dropped there are found when ggml's CUDA backend is loaded.
+    /// libraries kept there are found when ggml's CUDA backend is loaded.
     /// Prepending to PATH rather than calling AddDllDirectory: whisper.cpp's
     /// backend is loaded by absolute path, and mixing the two Win32 search
     /// mechanisms is exactly the kind of subtlety that works on one machine
     /// and not the next. This is process-local — nothing outside VoxMark sees
     /// it, and nothing is written to the machine.
+    ///
+    /// Safe to call as often as you like, and worth calling whenever the
+    /// folder might have changed: it does nothing when the folder is already
+    /// on the path, and a folder chosen in Settings after the first probe
+    /// would otherwise never be searched.
     /// </summary>
-    private static void AddCudaFolderToSearchPath()
+    public static void UseCudaFolder()
     {
         try
         {
-            if (!Directory.Exists(CudaFolder)) return;
+            var folder = CudaFolder;
+            if (!Directory.Exists(folder)) return;
 
             var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-            if (path.Contains(CudaFolder, StringComparison.OrdinalIgnoreCase)) return;
+            if (path.Contains(folder, StringComparison.OrdinalIgnoreCase)) return;
 
-            Environment.SetEnvironmentVariable("PATH", CudaFolder + Path.PathSeparator + path);
+            Environment.SetEnvironmentVariable("PATH", folder + Path.PathSeparator + path);
         }
         catch (Exception)
         {

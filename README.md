@@ -146,6 +146,14 @@ in NVIDIA's `nvidia-cuda-runtime-cu12` and `nvidia-cublas-cu12` redistributable
 packages. Copy them from a machine that has them the same way you copied the
 model file across.
 
+**Anywhere else is fine too.** The three files come to about 700 MB, so if the
+C: drive is tight, put them on another drive and point VoxMark at it:
+**Settings → Speech recognition → CUDA libraries → Browse…** (`D:\cuda\`, a
+network share you have mapped, anywhere). **Reset** goes back to the folder
+under Documents. VoxMark only adds whichever folder you name to its own search
+path and never writes to it, so the same folder can be shared with other
+software.
+
 > **Tip — reclaiming disk space.** A single-file exe unpacks itself into
 > `%TEMP%\.net\VoxMark\` on first run, and the full build's CUDA engine makes
 > that about 400 MB *per version you have run*. Old folders there are never

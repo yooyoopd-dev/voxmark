@@ -242,7 +242,11 @@ also writes the full picture to the Settings Log.
 `Documents\VoxMark\cuda\` is the escape hatch for a machine that cannot run
 NVIDIA's installer — drop the three DLLs there and `Probe` puts the folder on
 the process PATH before whisper is loaded. Process-local, nothing written to
-the system. **Don't "fix" any of this by bundling the CUDA libraries**, and
+the system. That folder is only the *default*: `TranscriptionSettingsStore.
+CudaPath` can point it at any drive (700 MB is a lot to ask of a full C:), so
+`CudaFolder` reads the setting fresh every time rather than caching it, and
+`UseCudaFolder` runs on **every** `Probe` call rather than once — a folder
+chosen in Settings after the first probe would otherwise never be searched. **Don't "fix" any of this by bundling the CUDA libraries**, and
 don't remove the fallback notice: a five-times-slower engine that says nothing
 is the failure mode this exists to prevent.
 
