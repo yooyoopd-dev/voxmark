@@ -280,8 +280,8 @@ Mono** (shipping font files fights the one-small-exe requirement, so the app
 substitutes Segoe UI Variable and Cascadia Mono). See "Scope of this build"
 in [`CLAUDE.md`](CLAUDE.md) for the full list and the reasoning.
 
-## For Whisper Model
+## For Whisper Model & CUDA 12 Runtime
 
-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin.
+https://huggingface.co/ggerganov/whisper.cpp/tree/main
 
 https://developer.nvidia.com/cuda-12-0-0-download-archive
