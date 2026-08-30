@@ -90,6 +90,8 @@ multilingual ones of the same size.
 finds it by itself. (Or use **Browse** on the setup screen to point at it
 anywhere.)
 
+**2-1. Set up CUDA acceleration.** Create a folder (e.g., D:\CUDA or wherever you prefer) and copy `cudart64_12.dll`, `cublas64_12.dll`, and `cublasLt64_12.dll` into it. Then, add that folder path to your system PATH (or place the three .dll files directly in the VoxMark application directory).
+
 **3. Turn it on.** Setup → Recording options → **Live transcription**. The
 line underneath tells you which model it found and whether it is running on
 `CUDA` or `CPU`. If something is missing it says what, and recording still
@@ -346,6 +348,8 @@ Mono** (shipping font files fights the one-small-exe requirement, so the app
 substitutes Segoe UI Variable and Cascadia Mono). See "Scope of this build"
 in [`CLAUDE.md`](CLAUDE.md) for the full list and the reasoning.
 
-## For Whisper Model
+## For Whisper Model & CUDA 12 Runtime
 
-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin.
+https://huggingface.co/ggerganov/whisper.cpp/tree/main
+
+https://developer.nvidia.com/cuda-12-0-0-download-archive
