@@ -219,6 +219,15 @@ public sealed class TranscriptionService : IDisposable
             var mono = ToMono(buffer, bytesRecorded, format);
             if (mono.Length == 0) return;
 
+            // A replacement input device after an unplug can deliver a
+            // different sample rate, and this pipeline's whole timebase is
+            // "frames consumed ÷ the rate it started at". Re-stretching the
+            // buffer to that rate keeps every segment time honest; the
+            // interpolation is crude, but it is a recovery path, and a
+            // slightly rougher chunk is worth far more than a transcript
+            // whose clock has quietly drifted away from the marks.
+            if (format.SampleRate != _sourceSampleRate) mono = Restretch(mono, format.SampleRate);
+
             lock (_lock)
             {
                 // Falling behind is a real possibility on a CPU-only machine
@@ -246,6 +255,32 @@ public sealed class TranscriptionService : IDisposable
         {
             // Whatever went wrong here, it does not get to reach the encoder.
         }
+    }
+
+    /// <summary>
+    /// Linearly resample a mono buffer from <paramref name="sourceRate"/> to
+    /// the rate this pipeline was started at. Only ever reached after the
+    /// input device changed mid-meeting.
+    /// </summary>
+    private float[] Restretch(float[] mono, int sourceRate)
+    {
+        if (sourceRate <= 0 || mono.Length == 0) return mono;
+
+        var ratio = _sourceSampleRate / (double)sourceRate;
+        var length = (int)(mono.Length * ratio);
+        if (length <= 0) return Array.Empty<float>();
+
+        var stretched = new float[length];
+        for (var i = 0; i < length; i++)
+        {
+            var at = i / ratio;
+            var low = (int)at;
+            var high = Math.Min(mono.Length - 1, low + 1);
+            var fraction = (float)(at - low);
+            stretched[i] = mono[low] + (mono[high] - mono[low]) * fraction;
+        }
+
+        return stretched;
     }
 
     /// <summary>

@@ -20,7 +20,9 @@ namespace MeetingRecorder.Services;
 ///     encoder, so a paused span is simply absent from the MP3 rather than
 ///     needing to be cut out afterwards.
 ///   - A device unplugged mid-session falls back to another input and keeps
-///     recording. It never stops.
+///     recording. It never stops — and if no input can be opened at that
+///     instant, a watchdog keeps trying until one can, rather than leaving
+///     the meeting silently dead.
 ///
 /// It can also roll to a new MP3 every N minutes. The rolled files are still
 /// one continuous recording as far as the marks are concerned:
@@ -50,14 +52,41 @@ public sealed class AudioCaptureService : IDisposable
     private LameMP3FileWriter? _mp3Writer;
     private WaveFormat? _writerFormat;
     private long _bytesWritten;
-    private double _bytesPerSecond = SampleRate * Channels * (BitsPerSample / 8.0);
+
+    /// <summary>
+    /// Audio actually written, in seconds, accumulated buffer by buffer from
+    /// the bytes each one carried. It is the same "count the samples that were
+    /// written" rule as before — but accumulated rather than divided at the
+    /// end, because a replacement device can deliver a different sample rate
+    /// and one bytes-per-second constant can no longer describe the whole
+    /// file. Still never the wall clock.
+    /// </summary>
+    private double _secondsWritten;
+
     private int _deviceNumber;
     private bool _stopRequested;
 
     private string _folder = "";
     private string _baseName = "";
-    private long _splitBytes;
-    private long _partStartBytes;
+    private double _splitSeconds;
+    private double _partStartSeconds;
+
+    /// <summary>
+    /// When the last capture buffer arrived. Wall clock, deliberately: it
+    /// answers "is the device still delivering?", never "how far into the
+    /// recording are we?" — that stays on the sample count.
+    /// </summary>
+    private DateTime _lastBufferAt = DateTime.UtcNow;
+
+    /// <summary>Throttles the re-open attempt below; wall clock, same reasoning.</summary>
+    private DateTime _lastWriterRetry = DateTime.MinValue;
+
+    private System.Threading.Timer? _watchdog;
+    private int _recovering;
+    private bool _announcedOutage;
+
+    /// <summary>How long a silent device is given before it is treated as gone.</summary>
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(3);
 
     public AudioCaptureService(int bitrateKbps = 128) => _bitrateKbps = bitrateKbps;
 
@@ -80,7 +109,7 @@ public sealed class AudioCaptureService : IDisposable
         new WaveFormat(SampleRate, BitsPerSample, Channels);
 
     /// <summary>Elapsed seconds of audio actually written to the MP3 so far.</summary>
-    public double ElapsedSeconds => _bytesWritten / _bytesPerSecond;
+    public double ElapsedSeconds => _secondsWritten;
 
     public long BytesWritten => _bytesWritten;
 
@@ -131,8 +160,10 @@ public sealed class AudioCaptureService : IDisposable
         if (IsCapturing) throw new InvalidOperationException("Already capturing.");
 
         _bytesWritten = 0;
-        _partStartBytes = 0;
+        _secondsWritten = 0;
+        _partStartSeconds = 0;
         _stopRequested = false;
+        _announcedOutage = false;
         _deviceNumber = deviceNumber;
         _folder = folder;
         _baseName = baseName;
@@ -143,34 +174,57 @@ public sealed class AudioCaptureService : IDisposable
         _waveIn = AudioDevices.OpenAndStart(deviceNumber, out var name, out var format);
         DeviceName = name;
         _writerFormat = format;
-        _bytesPerSecond = format.AverageBytesPerSecond;
         FormatDescription = Describe(format, _bitrateKbps);
 
-        // A split is expressed in bytes so the check on the capture thread is
-        // an integer comparison rather than a division per buffer.
-        _splitBytes = splitMinutes > 0
-            ? (long)(splitMinutes * 60.0 * _bytesPerSecond)
-            : 0;
+        _splitSeconds = splitMinutes > 0 ? splitMinutes * 60.0 : 0;
 
         OpenNextPart();
 
+        _lastBufferAt = DateTime.UtcNow;
         _waveIn.DataAvailable += OnDataAvailable;
         _waveIn.RecordingStopped += OnRecordingStopped;
 
         IsCapturing = true;
         IsPaused = false;
+
+        // The device is watched from here on. RecordingStopped is the polite
+        // way a driver says it has gone, and it is not always sent: a device
+        // that simply stops delivering buffers used to leave the meeting
+        // recording nothing, with the timer still running and no way back.
+        _watchdog = new System.Threading.Timer(_ => CheckStillAlive(), null, 1000, 1000);
+    }
+
+    /// <summary>
+    /// Is audio still arriving? Runs on a timer thread once a second and does
+    /// nothing at all in the healthy case.
+    /// </summary>
+    private void CheckStillAlive()
+    {
+        if (!IsCapturing || _stopRequested) return;
+
+        // A paused meeting still receives buffers — the pause is downstream of
+        // capture — so this check is meaningful while paused too, and a device
+        // lost during a pause is found again before the operator resumes.
+        if (_waveIn is not null && DateTime.UtcNow - _lastBufferAt < StallTimeout) return;
+
+        Recover(_waveIn is null ? "no input device" : "\"" + DeviceName + "\" stopped delivering audio");
     }
 
     /// <summary>Close the file being written and start the next one.</summary>
     private void OpenNextPart()
     {
         var index = _parts.Count + 1;
-        var fileName = _splitBytes > 0
+
+        // Index 1 of an unsplit session keeps the plain name it has always
+        // had. A later part can still appear there — a replacement input with
+        // a different sample rate cannot be appended to an MP3 already open —
+        // and it is numbered rather than overwriting anything.
+        var fileName = _splitSeconds > 0 || index > 1
             ? _baseName + "_part" + index.ToString("00") + ".mp3"
             : _baseName + ".mp3";
 
         _mp3Writer = new LameMP3FileWriter(Path.Combine(_folder, fileName), _writerFormat!, _bitrateKbps);
-        _partStartBytes = _bytesWritten;
+        _partStartSeconds = ElapsedSeconds;
         _parts.Add(new AudioPart
         {
             Index = index,
@@ -190,19 +244,58 @@ public sealed class AudioCaptureService : IDisposable
         AudioPart rolled;
         lock (_writerLock)
         {
-            _parts[^1].EndSeconds = ElapsedSeconds;
-            rolled = _parts[^1];
-            try
+            rolled = RollLocked();
+        }
+        PartRolled?.Invoke(rolled);
+    }
+
+    /// <summary>Close the open file and open the next one. Caller holds the writer lock.</summary>
+    private AudioPart RollLocked()
+    {
+        _parts[^1].EndSeconds = ElapsedSeconds;
+        var rolled = _parts[^1];
+        try
+        {
+            _mp3Writer?.Dispose();
+        }
+        catch (Exception)
+        {
+            // A failed flush costs this part's tail, not the recording.
+            DroppedBuffers++;
+        }
+        _mp3Writer = null;
+        OpenNextPart();
+        return rolled;
+    }
+
+    /// <summary>
+    /// The replacement device delivers a different format. An MP3 is encoded
+    /// for one format from its first frame, so the open file is finished and
+    /// the recording continues into the next one — which is what keeps the
+    /// promise that matters (the meeting is still being recorded) instead of
+    /// the one that does not (it is all in a single file).
+    ///
+    /// The timeline is untouched: <see cref="ElapsedSeconds"/> accumulates
+    /// across parts, so a mark made after the swap means what it says.
+    /// </summary>
+    private void SwitchFormat(WaveFormat format)
+    {
+        AudioPart rolled;
+        lock (_writerLock)
+        {
+            var previous = Describe(_writerFormat!, _bitrateKbps);
+            _writerFormat = format;
+            var current = Describe(format, _bitrateKbps);
+
+            // audio_format has to describe every file the session produced,
+            // so a change is appended rather than replacing what came before.
+            if (!FormatDescription.EndsWith(current, StringComparison.Ordinal))
             {
-                _mp3Writer?.Dispose();
+                FormatDescription = (FormatDescription.Length > 0 ? FormatDescription : previous)
+                    + " → " + current + " (from part " + (_parts.Count + 1) + ")";
             }
-            catch (Exception)
-            {
-                // A failed flush costs this part's tail, not the recording.
-                DroppedBuffers++;
-            }
-            _mp3Writer = null;
-            OpenNextPart();
+
+            rolled = RollLocked();
         }
         PartRolled?.Invoke(rolled);
     }
@@ -224,6 +317,9 @@ public sealed class AudioCaptureService : IDisposable
         _stopRequested = true;
         IsCapturing = false;
 
+        _watchdog?.Dispose();
+        _watchdog = null;
+
         if (_waveIn is not null)
         {
             _waveIn.DataAvailable -= OnDataAvailable;
@@ -243,12 +339,19 @@ public sealed class AudioCaptureService : IDisposable
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
+        // Before anything else: a buffer that arrives after Stop — from a
+        // device a recovery adopted as the meeting was ending — belongs to
+        // nothing and must not re-open a file.
+        if (_stopRequested || !IsCapturing) return;
+
         var format = _writerFormat;
         if (format is null) return;
 
+        _lastBufferAt = DateTime.UtcNow;
+
         LevelChanged?.Invoke(ComputePeak(e.Buffer, e.BytesRecorded, format));
 
-        if (IsPaused || _stopRequested) return;
+        if (IsPaused) return;
 
         // Cut the buffer before writing, so each slice carries the file time
         // it actually starts at rather than the time the buffer ended.
@@ -258,9 +361,31 @@ public sealed class AudioCaptureService : IDisposable
         {
             lock (_writerLock)
             {
-                _mp3Writer?.Write(e.Buffer, 0, e.BytesRecorded);
-                _bytesWritten += e.BytesRecorded;
-                if (_parts.Count > 0) _parts[^1].EndSeconds = ElapsedSeconds;
+                // No encoder means the last attempt to open a file failed —
+                // a full disk, a folder that went away with a USB drive. Try
+                // again, once a second, rather than discarding the rest of
+                // the meeting in silence. A constructor that throws adds no
+                // part, so a failed retry costs nothing but the attempt.
+                if (_mp3Writer is null && DateTime.UtcNow - _lastWriterRetry > TimeSpan.FromSeconds(1))
+                {
+                    _lastWriterRetry = DateTime.UtcNow;
+                    try { OpenNextPart(); } catch (Exception) { }
+                }
+
+                if (_mp3Writer is null)
+                {
+                    // The clock only counts audio that reached a file, so it
+                    // does not advance here — the same rule that makes a
+                    // paused span simply absent.
+                    DroppedBuffers++;
+                }
+                else
+                {
+                    _mp3Writer.Write(e.Buffer, 0, e.BytesRecorded);
+                    _bytesWritten += e.BytesRecorded;
+                    _secondsWritten += e.BytesRecorded / (double)Math.Max(1, format.AverageBytesPerSecond);
+                    if (_parts.Count > 0) _parts[^1].EndSeconds = ElapsedSeconds;
+                }
             }
         }
         catch (Exception)
@@ -284,7 +409,7 @@ public sealed class AudioCaptureService : IDisposable
             }
         }
 
-        if (_splitBytes > 0 && _bytesWritten - _partStartBytes >= _splitBytes) RollPart();
+        if (_splitSeconds > 0 && ElapsedSeconds - _partStartSeconds >= _splitSeconds) RollPart();
     }
 
     /// <summary>
@@ -358,61 +483,162 @@ public sealed class AudioCaptureService : IDisposable
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
         if (_stopRequested || e.Exception is null) return;
+        Recover("\"" + DeviceName + "\" disappeared");
+    }
 
-        var failed = DeviceName;
-        var old = _waveIn;
-        if (old is not null)
-        {
-            old.DataAvailable -= OnDataAvailable;
-            old.RecordingStopped -= OnRecordingStopped;
-            try { old.Dispose(); } catch (Exception) { }
-        }
-        _waveIn = null;
+    /// <summary>
+    /// Put the recording back on an input, whatever it takes.
+    ///
+    /// Reached from two directions — the driver said it stopped, or the
+    /// watchdog noticed the buffers had — and it accepts a device whose
+    /// format differs from the open MP3's by rolling to a new file for it.
+    /// Refusing such a device is what used to end the meeting: connect a
+    /// Bluetooth headset and Windows re-shuffles the inputs, so the
+    /// replacement is very often 16 or 48 kHz where the file was 44.1.
+    ///
+    /// If nothing can be opened this second, it says so once and returns; the
+    /// watchdog calls again a second later, and the meeting resumes by itself
+    /// the moment an input exists.
+    /// </summary>
+    private void Recover(string reason)
+    {
+        if (Interlocked.Exchange(ref _recovering, 1) == 1) return;
 
-        foreach (var candidate in FallbackCandidates())
+        try
         {
-            try
+            // Stop() can land between the watchdog deciding to act and this
+            // line; re-opening a device after that would leave one running
+            // with nothing to write into.
+            if (_stopRequested || !IsCapturing) return;
+
+            DetachDevice();
+
+            foreach (var candidate in FallbackCandidates())
             {
-                var device = AudioDevices.OpenAndStart(candidate, out var name, out var format);
-                if (!format.Equals(_writerFormat))
+                IWaveIn device;
+                string name;
+                WaveFormat format;
+                try
                 {
-                    // A different format cannot be appended to the MP3 that
-                    // is already open, so this candidate is no good.
-                    try { device.StopRecording(); } catch (Exception) { }
-                    device.Dispose();
+                    device = AudioDevices.OpenAndStart(candidate, out name, out format);
+                }
+                catch (Exception)
+                {
                     continue;
                 }
 
-                _waveIn = device;
-                _deviceNumber = candidate;
-                DeviceName = name;
-                device.DataAvailable += OnDataAvailable;
-                device.RecordingStopped += OnRecordingStopped;
-                DeviceChanged?.Invoke("Input \"" + failed + "\" disappeared — recording continued on \"" + name + "\".");
+                bool reformatted;
+                try
+                {
+                    reformatted = !format.Equals(_writerFormat);
+                    if (reformatted) SwitchFormat(format);
+
+                    _deviceNumber = candidate;
+                    DeviceName = name;
+                    _lastBufferAt = DateTime.UtcNow;
+                    _waveIn = device;
+                    device.DataAvailable += OnDataAvailable;
+                    device.RecordingStopped += OnRecordingStopped;
+
+                    // Stop() may have landed while this candidate was opening.
+                    if (_stopRequested || !IsCapturing)
+                    {
+                        DetachDevice();
+                        return;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Opening worked but adopting it did not; leave the
+                    // device closed and let the watchdog come round again.
+                    try { device.StopRecording(); } catch (Exception) { }
+                    try { device.Dispose(); } catch (Exception) { }
+                    continue;
+                }
+
+                _announcedOutage = false;
+                DeviceChanged?.Invoke("Input " + reason + " — recording continued on \"" + name + "\"" +
+                                      (reformatted
+                                          ? ", in " + _parts[^1].FileName + ": it delivers " +
+                                            format.SampleRate + " Hz where the previous file was encoded for " +
+                                            "another rate, which no single MP3 can hold."
+                                          : "."));
                 return;
             }
-            catch (Exception)
-            {
-                // Try the next one.
-            }
-        }
 
-        DeviceChanged?.Invoke("Input \"" + failed + "\" disappeared and no compatible replacement was found — " +
-                              "the file is intact but no new audio is being captured.");
+            if (_announcedOutage) return;
+            _announcedOutage = true;
+            DeviceChanged?.Invoke("Input " + reason + " and nothing else would open — everything recorded so far " +
+                                  "is safe on disk, and recording resumes by itself as soon as an input is available.");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _recovering, 0);
+        }
     }
 
+    private void DetachDevice()
+    {
+        var old = _waveIn;
+        _waveIn = null;
+        if (old is null) return;
+
+        old.DataAvailable -= OnDataAvailable;
+        old.RecordingStopped -= OnRecordingStopped;
+        try { old.StopRecording(); } catch (Exception) { }
+        try { old.Dispose(); } catch (Exception) { }
+    }
+
+    /// <summary>
+    /// Inputs to try, best first. The device that was recording leads —
+    /// looked up by the <em>name</em> it had, because device numbers shift
+    /// when one appears or disappears, and a headset connecting mid-meeting
+    /// is exactly that: the number we opened is now somebody else.
+    /// </summary>
     private IEnumerable<int> FallbackCandidates()
     {
-        // Whatever Windows now calls the default is the best first guess when
-        // the device that was unplugged was the previous default.
-        if (_deviceNumber != AudioDevices.DefaultDeviceNumber) yield return AudioDevices.DefaultDeviceNumber;
-
-        for (var i = 0; i < WaveInEvent.DeviceCount; i++)
+        if (_deviceNumber == LoopbackDeviceNumber)
         {
-            if (i != _deviceNumber) yield return i;
+            // A session recording system audio wants system audio back, not
+            // the nearest microphone.
+            yield return LoopbackDeviceNumber;
+        }
+        else if (_deviceNumber == AudioDevices.DefaultDeviceNumber)
+        {
+            yield return AudioDevices.DefaultDeviceNumber;
+        }
+        else
+        {
+            var count = DeviceCount();
+            for (var i = 0; i < count; i++)
+            {
+                if (string.Equals(AudioDevices.NameOf(i), DeviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return i;
+                    break;
+                }
+            }
+
+            yield return _deviceNumber;
+            yield return AudioDevices.DefaultDeviceNumber;
         }
 
+        var live = DeviceCount();
+        for (var i = 0; i < live; i++) yield return i;
+
         if (_deviceNumber != LoopbackDeviceNumber) yield return LoopbackDeviceNumber;
+    }
+
+    private static int DeviceCount()
+    {
+        try
+        {
+            return WaveInEvent.DeviceCount;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     /// <summary>PCM peak level in the buffer, normalised to 0..1.</summary>
@@ -443,5 +669,10 @@ public sealed class AudioCaptureService : IDisposable
         return peak / 32768.0;
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        Stop();
+        _watchdog?.Dispose();
+        _watchdog = null;
+    }
 }

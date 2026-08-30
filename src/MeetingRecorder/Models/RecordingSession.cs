@@ -106,6 +106,35 @@ public sealed class RecordingSession
         Path.Combine(SessionFolder, Path.ChangeExtension(part.FileName, ".md"));
 
     /// <summary>
+    /// The one Markdown covering every part of a split session:
+    /// <c>meeting_full.md</c> beside <c>meeting_part01.md</c> and its
+    /// siblings. The suffix is not decoration — a session that rolled a
+    /// second file mid-meeting (a replacement input device with another
+    /// sample rate) has <c>meeting.mp3</c> as part 1, so the bare stem is
+    /// already taken by that part's own Markdown.
+    ///
+    /// Only meaningful when <see cref="IsSplit"/>; an unsplit session's
+    /// single Markdown already covers everything.
+    /// </summary>
+    [JsonIgnore]
+    public string CombinedMarkdownPath => Path.Combine(SessionFolder, CombinedStem() + "_full.md");
+
+    /// <summary>
+    /// The session's file-name stem. <see cref="AudioBaseName"/> is it,
+    /// except for a session written before that field existed — there the
+    /// only stem available is part 1's own file name, and it has to have its
+    /// "_partNN" taken back off to name the set rather than one member of it.
+    /// </summary>
+    private string CombinedStem()
+    {
+        if (AudioBaseName.Length > 0) return AudioBaseName;
+
+        var stem = Path.GetFileNameWithoutExtension(AudioFileName);
+        var part = stem.LastIndexOf("_part", StringComparison.OrdinalIgnoreCase);
+        return part > 0 ? stem[..part] : stem;
+    }
+
+    /// <summary>
     /// The parts as they should be treated for export. A session recorded
     /// before parts existed, or recovered from an older folder, still has to
     /// produce exactly one file, so it gets a synthetic single part.

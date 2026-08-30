@@ -109,3 +109,67 @@ jobs:
           files: |
             publish/full/VoxMark.exe
             publish/lite/VoxMark-Lite.exe
+
+      # Two 150–230 MB EXEs per release adds up fast, and GitHub counts every
+      # one of them against the repository forever. Only the newest release
+      # is a download anyone wants, so the older ones keep their tag, notes
+      # and source archives and lose just the binaries.
+      #
+      # "Older" is measured against the release this run published, not
+      # against "everything else": re-running an old tag's workflow must not
+      # strip the assets off a newer release.
+      - name: Keep the EXEs only on the newest release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $keep = $env:KEEP_TAG
+          # No --paginate: it concatenates one JSON array per page, which
+          # ConvertFrom-Json will not read as a single document. One page of
+          # 100 is every release this repository is ever likely to have.
+          $releases = gh api "repos/$repo/releases?per_page=100" | ConvertFrom-Json
+          $kept = $releases | Where-Object { $_.tag_name -eq $keep } | Select-Object -First 1
+          if (-not $kept) {
+              Write-Host "::warning::Could not find the release for $keep; leaving every asset alone."
+              exit 0
+          }
+
+          function Published($release) {
+              if ($release.published_at) { return [datetime]$release.published_at }
+              return [datetime]$release.created_at
+          }
+
+          $cutoff = Published $kept
+          $freed = 0
+          $failed = 0
+
+          foreach ($release in $releases) {
+              if ($release.tag_name -eq $keep) { continue }
+              if ((Published $release) -ge $cutoff) { continue }
+
+              $binaries = @($release.assets | Where-Object { $_.name -like "*.exe" })
+              if ($binaries.Count -eq 0) { continue }
+
+              foreach ($asset in $binaries) {
+                  $mb = [math]::Round($asset.size / 1MB)
+                  Write-Host "$($release.tag_name): removing $($asset.name) ($mb MB)"
+                  gh api -X DELETE "repos/$repo/releases/assets/$($asset.id)" | Out-Null
+                  if ($LASTEXITCODE -ne 0) { $failed++ } else { $freed += $asset.size }
+                  $global:LASTEXITCODE = 0
+              }
+
+              # Say so on the release itself, so a visitor who lands on an old
+              # version finds an explanation rather than an empty file list.
+              $note = "_Binaries for this version were removed to keep the repository's release storage bounded. The current release always carries both EXEs._"
+              if ($release.body -notlike "*release storage bounded*") {
+                  $body = ($release.body + "`n`n" + $note).TrimStart("`n")
+                  gh api -X PATCH "repos/$repo/releases/$($release.id)" -f body="$body" | Out-Null
+                  $global:LASTEXITCODE = 0
+              }
+          }
+
+          Write-Host ("Freed {0:N0} MB from older releases." -f ($freed / 1MB))
+          if ($failed -gt 0) { Write-Host "::warning::$failed asset(s) could not be deleted." }

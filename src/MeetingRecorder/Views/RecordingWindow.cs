@@ -632,7 +632,16 @@ public sealed class RecordingWindow : ShellWindow
             _session.Notes.Add(message);
             _session.InputDeviceName = _capture.DeviceName;
             _inputName.Text = _capture.DeviceName;
+
+            // A replacement device can be a different sample rate, which the
+            // recorder handles by rolling into a new file — so audio_format
+            // is no longer what it was when the meeting started.
+            _session.AudioFormatDescription = _capture.FormatDescription;
+            _session.AudioParts = _capture.Parts.ToList();
+            UpdatePartLabel();
+
             ShowNotice(message);
+            PersistSession(_capture.ElapsedSeconds);
         });
     }
 
@@ -819,13 +828,19 @@ public sealed class RecordingWindow : ShellWindow
     /// <summary>Which MP3 is being written, when the operator asked for a split.</summary>
     private void UpdatePartLabel()
     {
+        var count = Math.Max(1, _capture.Parts.Count);
+
         if (_session.Options.SplitMinutes <= 0)
         {
-            _partLabel.Text = "";
+            // Normally nothing to say — but an input device that changed
+            // format mid-meeting rolls a new file whether a split was asked
+            // for or not, and the operator should not have to discover that
+            // in the folder afterwards.
+            _partLabel.Text = count > 1 ? "file " + count + " · rolled after an input change" : "";
+            if (count > 1) _partLabel.Margin = new Thickness(0, 0, 20, 0);
             return;
         }
 
-        var count = Math.Max(1, _capture.Parts.Count);
         _partLabel.Text = "file " + count + " · splits every " + _session.Options.SplitMinutes + " min";
         _partLabel.Margin = new Thickness(0, 0, 20, 0);
     }

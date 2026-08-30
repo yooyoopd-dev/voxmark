@@ -150,6 +150,8 @@ Implemented, with the guide section each answers to:
 - **11 non-negotiables** — `marks.jsonl` fsync'd per operation, sleep and
   display-off inhibited, device-unplugged fallback that keeps recording and
   writes a note into the Markdown, timestamps from the audio sample count.
+  See "Losing the input device" below for what that fallback actually has to
+  survive.
 - **Speech recognition (Full edition)** — beyond the guide: an opt-in
   on-device whisper pass, a three-line live transcript strip under the
   minimap, and a `## Transcript` section mapping the words onto the marks.
@@ -303,6 +305,14 @@ is *what the value is about*, not how often it changes:
   — device and level meter — which the design guide's section 07 makes a
   ritual, so it never moves to Settings.
 
+Both screens write `transcription.json`, and both must **read-modify-write**
+it. `SetupWindow.RememberTranscription` once saved a brand-new `Settings`
+object holding only the three fields that screen owns, which silently reset
+`CudaPath` every time the operator flipped the Live-transcription toggle —
+the folder chosen in Settings was gone by the next launch, and speech
+recognition was back on the CPU with nothing to explain why. Any new field on
+that type inherits the same trap.
+
 Setup shows a read-only echo with a "Settings" link for each value it no
 longer owns, so nobody starts a recording without seeing where it will land.
 The echo takes its value from `_options`, which is seeded from the app
@@ -323,6 +333,40 @@ Two path rules fall out of this and are easy to break:
 - Every store write reachable from a click handler is wrapped, and its
   diagnostic goes to `AppPaths.Note` for the Settings Log. An unhandled
   exception on the dispatcher is not an error message, it is a closed app.
+
+## Losing the input device mid-meeting
+
+Section 11 says recording never stops, and the input device is the most
+common way it tries to. Three rules hold this together, all in
+`AudioCaptureService`:
+
+- **A watchdog, not just an event.** `RecordingStopped` is the polite way a
+  driver says it has gone, and it is not always sent — a device can simply
+  stop delivering buffers. A one-second timer notices three seconds of
+  silence-from-the-device (not a silent room; no buffers at all) and runs the
+  same recovery. It also keeps trying: if nothing can be opened right now it
+  says so **once** and the next tick tries again, so a meeting resumes by
+  itself rather than needing the app restarted.
+- **A different format is accepted, by rolling a new file.** The old code
+  refused any replacement whose `WaveFormat` differed from the open MP3's,
+  which is precisely the Bluetooth-headset case — Windows re-shuffles the
+  inputs and the replacement is 16 or 48 kHz where the file was 44.1 — and
+  that refusal is what used to end the meeting for good. An MP3 is encoded
+  for one format from its first frame, so the answer is to finish that file
+  and continue into the next one. `audio_format` then names both, and a
+  session that never asked for a split can legitimately end up with
+  `meeting.mp3` and `meeting_part02.mp3`.
+- **The clock counts what reached a file.** `ElapsedSeconds` accumulates
+  `bytes ÷ AverageBytesPerSecond` per buffer instead of dividing one byte
+  total by one constant, because a format change makes that constant a lie.
+  It is still the sample count and still never the wall clock; the two wall
+  clocks in this file (`_lastBufferAt`, `_lastWriterRetry`) answer "is the
+  hardware alive?" and nothing else.
+
+`TranscriptionService.Push` re-stretches a buffer whose rate changed back to
+the rate the pipeline started at, because its whole timebase is
+`framesConsumed ÷ sourceSampleRate` — a drifting transcript clock would be
+worse than a slightly rougher chunk.
 
 ## Output contract (read section 10 before touching `MarkdownExporter`)
 
@@ -349,6 +393,20 @@ keys rather than woven among them. A session recorded without transcription
 still produces byte-for-byte the file it always did apart from the standing
 agent brief below — that is the property to check first if you touch
 `MarkdownExporter`.
+
+A split session also gets **one further Markdown covering the whole
+meeting**, `{base}_full.md`, written by `MarkdownExporter.BuildCombined`. The
+split is a property of the audio, not of the meeting: the marks, gaps and
+transcript already share one continuous timeline, so the combined document is
+exactly the unsplit one plus an `audio_files` list saying which MP3 holds
+which stretch. It is additive in the same sense the transcript is — the
+per-part files are still written, byte for byte as before, and `Build`'s
+`split` flag still means "this document is one part of several", which is why
+none of the per-part clipping runs for the combined file. The MP3s are *not*
+joined; that would mean re-encoding, and a single large file is usually what
+the split was avoiding. The suffix is `_full` rather than the bare stem
+because a session that rolled a file after an input change already has
+`{base}.mp3` as its part 1.
 
 `## Agent Instructions` is the one section every export carries, transcript
 or not: the standing brief for the LLM the file is handed to, asking for a
@@ -428,7 +486,13 @@ requirement gets broken by accident.
 
 CI (`.github/workflows/build-windows-exe.yml`) publishes both exes on every
 push to `main` and uploads them as build artifacts; pushing a `v*` tag also
-attaches both to a GitHub Release. If you change build flags, make sure that
+attaches both to a GitHub Release — and then strips the `.exe` assets from
+every **older** release, since two 150–230 MB binaries per version count
+against the repository's storage forever and only the newest is a download
+anyone wants. Older releases keep their tag, notes and source archives, and
+gain a line saying where the binaries went. "Older" is measured against the
+release the run just published, so re-running an old tag never strips a newer
+one. If you change build flags, make sure that
 workflow still produces two working single-file exes — it's the actual proof
 the packaging requirement is met, since it can't be verified locally here.
 

@@ -404,6 +404,15 @@ public sealed class LibraryWindow : ShellWindow
                     MarkdownExporter.Build(session, part, parts.Count),
                     new System.Text.UTF8Encoding(false));
             }
+
+            // And the whole-session document, exactly as a clean stop writes it.
+            if (parts.Count > 1)
+            {
+                File.WriteAllText(
+                    session.CombinedMarkdownPath,
+                    MarkdownExporter.BuildCombined(session, parts),
+                    new System.Text.UTF8Encoding(false));
+            }
             SessionStore.Save(session);
 
             var export = new ExportWindow(session, alreadyWritten: true);

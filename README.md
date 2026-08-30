@@ -272,6 +272,26 @@ timebase: offset from the start of part 1, continuing across every part;
 A turn that runs across a boundary appears in both files, cut at the
 boundary, so no speech is lost.
 
+Alongside those per-part files, a split session also writes one
+`..._full.md` covering the **whole meeting** — every mark, gap and transcript
+line on one continuous timeline, with a list of which MP3 holds which stretch
+of audio:
+
+```yaml
+audio_file: 4 files — see audio_files
+audio_files:
+  - file: weekly-product-review_2026-03-12_part01.mp3
+    start: 00:00:00.000
+    end: 00:15:00.000
+  ...
+audio_parts: 4 (this file covers all of them)
+```
+
+That is the file to hand an LLM: it says the same thing as the four together,
+without asking anything to stitch them back into one meeting. The audio is
+*not* joined — merging MP3s would mean re-encoding them, and a single large
+file is usually the thing the split was avoiding.
+
 ## Build from source
 
 Building requires **Windows** and the
