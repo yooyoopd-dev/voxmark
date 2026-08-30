@@ -20,7 +20,8 @@ namespace MeetingRecorder.Views;
 /// much of the transcript will come back without a speaker attached.
 ///
 /// A session split into several MP3s lists every file it produced, each with
-/// the Markdown that goes with it.
+/// the Markdown that goes with it — and one further Markdown covering the
+/// whole meeting, because the split belongs to the audio, not to the meeting.
 /// </summary>
 public sealed class ExportWindow : ShellWindow
 {
@@ -67,7 +68,8 @@ public sealed class ExportWindow : ShellWindow
             "this is a finalise pass." +
             (_parts.Count > 1
                 ? " The recording was split into " + _parts.Count +
-                  " files; each one gets its own Markdown, and the timestamps keep counting from the first file."
+                  " files; each one gets its own Markdown, plus one more covering the whole meeting. " +
+                  "The timestamps keep counting from the first file."
                 : ""),
             13.5, Palette.TextDimBrush);
         blurb.Margin = new Thickness(0, 6, 0, 20);
@@ -109,7 +111,7 @@ public sealed class ExportWindow : ShellWindow
     private void RefreshFiles(string markdownState)
     {
         _files.Children.Clear();
-        _filesHeading.Text = ("Files · " + (_parts.Count * 2)).ToUpperInvariant();
+        _filesHeading.Text = ("Files · " + (_parts.Count * 2 + (_parts.Count > 1 ? 1 : 0))).ToUpperInvariant();
 
         foreach (var part in _parts)
         {
@@ -130,8 +132,20 @@ public sealed class ExportWindow : ShellWindow
 
         if (_parts.Count > 1)
         {
+            var combinedPath = _session.CombinedMarkdownPath;
+            var combinedWritten = File.Exists(combinedPath);
+            _files.Children.Add(FileRow(
+                combinedWritten ? "✓" : markdownState == "pending" ? "◐" : "✕",
+                combinedWritten ? Palette.GoodBrush
+                    : markdownState == "pending" ? Palette.AccentBrush : Palette.RecBrush,
+                Path.GetFileName(combinedPath),
+                combinedWritten ? FileSize(combinedPath) + " · whole session"
+                    : markdownState == "pending" ? "writing…" : markdownState));
+
             _files.Children.Add(Ui.Wrap(
-                "Every Markdown carries audio_part_start — subtract it from a timestamp to seek inside that file.",
+                "Every per-part Markdown carries audio_part_start — subtract it from a timestamp to seek inside " +
+                "that file. " + Path.GetFileName(combinedPath) + " holds the whole meeting in one document; " +
+                "the MP3s are not joined.",
                 11.5, Palette.TextMutedBrush));
         }
     }
@@ -158,6 +172,16 @@ public sealed class ExportWindow : ShellWindow
             {
                 var markdown = MarkdownExporter.Build(_session, part, _parts.Count);
                 File.WriteAllText(_session.MarkdownPathOf(part), markdown, new UTF8Encoding(false));
+            }
+
+            // Plus one covering the whole meeting. The audio stays split —
+            // joining MP3s would mean re-encoding — but the record of who
+            // spoke when is one meeting's worth of information and reads far
+            // better as one file.
+            if (_parts.Count > 1)
+            {
+                File.WriteAllText(_session.CombinedMarkdownPath,
+                    MarkdownExporter.BuildCombined(_session, _parts), new UTF8Encoding(false));
             }
 
             _session.Completed = true;
@@ -287,11 +311,20 @@ public sealed class ExportWindow : ShellWindow
         }
     }
 
-    /// <summary>Copy every Markdown, so a split session can still be pasted in one go.</summary>
+    /// <summary>Copy the whole session's Markdown, in one paste.</summary>
     private void CopyMarkdown()
     {
         try
         {
+            // One document beats a concatenation of several, so a split
+            // session copies the combined file rather than every part.
+            if (_parts.Count > 1 && File.Exists(_session.CombinedMarkdownPath))
+            {
+                Clipboard.SetText(File.ReadAllText(_session.CombinedMarkdownPath));
+                _copyButton.Content = "Copied the whole session";
+                return;
+            }
+
             var sb = new StringBuilder();
             foreach (var part in _parts)
             {

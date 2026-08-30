@@ -1149,19 +1149,38 @@ public sealed class SetupWindow : ShellWindow
             return;
         }
 
-        _transcribeStatus.Text = _transcriptionPreferred
+        // Where it will run is worth knowing here rather than mid-meeting: this
+        // is the last screen on which the operator can still install anything.
+        // Only the slow case is named — an engine that is about to do its job
+        // properly does not need announcing.
+        var slow = WhisperRuntime.GpuHint(WhisperRuntime.InspectGpu());
+
+        _transcribeStatus.Text = (_transcriptionPreferred
             ? "Ready — words are recognised on this PC while you mark, and land in the Markdown "
               + "under the speaker you marked."
-            : "A model is ready. Turn this on to transcribe while you record.";
-        _transcribeStatus.Foreground = Palette.TextMutedBrush;
+            : "A model is ready. Turn this on to transcribe while you record.")
+            + (slow is null ? "" : " " + slow);
+        _transcribeStatus.Foreground = slow is null ? Palette.TextMutedBrush : Palette.WarnBrush;
     }
 
-    private void RememberTranscription() => TranscriptionSettingsStore.Save(new TranscriptionSettingsStore.Settings
+    /// <summary>
+    /// Remember what this screen owns, and only that.
+    ///
+    /// Read-modify-write, for the same reason Settings does it: a brand-new
+    /// Settings object here silently reset every field this screen does not
+    /// show. <c>CudaPath</c> was the one that hurt — an operator pointed
+    /// Settings at <c>D:\cuda</c>, started a meeting, and the next launch was
+    /// back on the default folder and back on the CPU, with nothing to
+    /// suggest why.
+    /// </summary>
+    private void RememberTranscription()
     {
-        ModelPath = _options.WhisperModelPath,
-        Enabled = _transcriptionPreferred,
-        Language = _options.TranscriptionLanguage,
-    });
+        var settings = TranscriptionSettingsStore.Load();
+        settings.ModelPath = _options.WhisperModelPath;
+        settings.Enabled = _transcriptionPreferred;
+        settings.Language = _options.TranscriptionLanguage;
+        TranscriptionSettingsStore.Save(settings);
+    }
 #endif
 
     /// <summary>

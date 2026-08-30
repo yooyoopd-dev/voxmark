@@ -32,6 +32,33 @@ public static class MarkdownExporter
     }
 
     /// <summary>
+    /// One Markdown covering the whole session, for a recording that was
+    /// split into several MP3s.
+    ///
+    /// The per-part files are still written and still carry the section 10
+    /// contract each on its own; this one exists because the split is a
+    /// property of the <em>audio</em>, not of the meeting. Handing an agent
+    /// six files and asking it to stitch them back together is work the
+    /// exporter can simply do once, here — the marks, the gaps and the
+    /// transcript are already on a single continuous timeline, so the whole
+    /// session is exactly the unsplit document plus a list of which file
+    /// holds which stretch of audio. The MP3s are deliberately left alone:
+    /// concatenating them would mean re-encoding, and the reason the
+    /// recording was split is usually that a single file was unwanted.
+    /// </summary>
+    public static string BuildCombined(RecordingSession session, IReadOnlyList<AudioPart> parts)
+    {
+        var whole = new AudioPart
+        {
+            Index = 1,
+            FileName = parts.Count > 0 ? parts[0].FileName : session.AudioFileName,
+            StartSeconds = 0,
+            EndSeconds = session.AudioDurationSeconds,
+        };
+        return Build(session, whole, parts.Count, parts);
+    }
+
+    /// <summary>
     /// The Markdown for one audio file of a session.
     ///
     /// With <paramref name="partCount"/> at 1 this is exactly the section 10
@@ -42,10 +69,18 @@ public static class MarkdownExporter
     /// extra <c>audio_part_start</c> field is what lets a reader seek inside
     /// the file it is holding: subtract it from any timestamp here.
     /// </summary>
-    public static string Build(RecordingSession session, AudioPart part, int partCount)
+    public static string Build(RecordingSession session, AudioPart part, int partCount,
+                               IReadOnlyList<AudioPart>? combined = null)
     {
         var sb = new StringBuilder();
-        var split = partCount > 1;
+
+        // Three shapes, not two: one file for one MP3 (the plain contract),
+        // one file per part, and — when combined is given — one file for
+        // every part at once. "split" stays "this document is one part of
+        // several", so all the per-part clipping below is skipped for the
+        // combined document exactly as it is for an unsplit session.
+        var whole = combined is { Count: > 0 };
+        var split = partCount > 1 && !whole;
 
         var all = session.Marks.OrderBy(m => m.StartSeconds).ThenBy(m => m.Id).ToList();
 
@@ -87,10 +122,34 @@ public static class MarkdownExporter
         sb.Append("title: ").Append(Yaml(session.Title)).Append('\n');
         sb.Append("date: ").Append(session.StartedAt.ToString("yyyy-MM-ddTHH:mm:sszzz")).Append('\n');
         sb.Append("duration: ").Append(Timestamp(part.DurationSeconds)).Append('\n');
-        sb.Append("audio_file: ").Append(part.FileName).Append('\n');
+
+        if (whole)
+        {
+            // audio_file still answers "which audio is this about?", and then
+            // hands over to a list rather than naming one of several files and
+            // implying the rest do not exist.
+            sb.Append("audio_file: ").Append(combined!.Count).Append(" files — see audio_files\n");
+            sb.Append("audio_files:\n");
+            foreach (var each in combined)
+            {
+                sb.Append("  - file: ").Append(each.FileName).Append('\n');
+                sb.Append("    start: ").Append(Timestamp(each.StartSeconds)).Append('\n');
+                sb.Append("    end: ").Append(Timestamp(each.EndSeconds)).Append('\n');
+            }
+        }
+        else
+        {
+            sb.Append("audio_file: ").Append(part.FileName).Append('\n');
+        }
+
         sb.Append("audio_format: ").Append(session.AudioFormatDescription).Append('\n');
 
-        if (split)
+        if (whole)
+        {
+            sb.Append("audio_parts: ").Append(combined!.Count).Append(" (this file covers all of them)\n");
+            sb.Append("timebase: offset from the start of part 1, continuing across every file\n");
+        }
+        else if (split)
         {
             sb.Append("audio_part: ").Append(part.Index).Append(" of ").Append(partCount).Append('\n');
             sb.Append("audio_part_start: ").Append(Timestamp(part.StartSeconds)).Append('\n');
@@ -138,6 +197,7 @@ public static class MarkdownExporter
 
         sb.Append("# ").Append(session.Title);
         if (split) sb.Append(" — part ").Append(part.Index).Append(" of ").Append(partCount);
+        if (whole) sb.Append(" — complete session");
         sb.Append("\n\n");
 
         sb.Append("Speaker segments in chronological order. Each row is one continuous\n");
@@ -149,6 +209,15 @@ public static class MarkdownExporter
             sb.Append("\nTimes are offsets from the start of part 1, not from the start of\n");
             sb.Append("this file. This file begins at ").Append(Timestamp(part.StartSeconds))
               .Append(" — subtract that to seek within it.\n");
+        }
+        if (whole)
+        {
+            sb.Append("\nThe audio was written as ").Append(combined!.Count)
+              .Append(" MP3 files, but this document covers the whole\n");
+            sb.Append("meeting: every mark, gap and transcript line is here, on one continuous\n");
+            sb.Append("timeline that starts at the beginning of the first file. Use `audio_files`\n");
+            sb.Append("above to find which file holds a given time, and subtract that file's\n");
+            sb.Append("`start` to seek inside it.\n");
         }
         sb.Append('\n');
         sb.Append("| # | speaker | name | start | end | duration |\n");
@@ -181,7 +250,18 @@ public static class MarkdownExporter
         AppendTranscript(sb, session, marks, segments, numbers);
 
         sb.Append("\n## Notes\n\n");
-        if (split)
+        if (whole)
+        {
+            sb.Append("- This session was recorded as ").Append(combined!.Count)
+              .Append(" MP3 files. This document covers all of them;\n");
+            sb.Append("  each file also has its own Markdown beside it, holding only its own\n");
+            sb.Append("  stretch of the meeting.\n");
+            sb.Append("- All times are offsets from the start of the first file and run\n");
+            sb.Append("  continuously across the set — they do not restart per file.\n");
+            sb.Append("- The audio itself was not joined. A turn that ran across a file boundary\n");
+            sb.Append("  is one unbroken row here, and its speech is split across two MP3s.\n");
+        }
+        else if (split)
         {
             sb.Append("- This session was recorded as ").Append(partCount)
               .Append(" MP3 files; this is part ").Append(part.Index)
@@ -226,10 +306,12 @@ public static class MarkdownExporter
             }
         }
 
-        sb.Append("- Mark starts are shifted ")
-          .Append(session.Options.MarkStartOffsetSeconds.ToString("0.#"))
-          .Append(" s earlier than the operator's key press.\n");
-
+        // The mark-start offset is deliberately *not* noted here. The guide's
+        // own sample output carries the line, but it describes how the marks
+        // were made rather than what they say, and every reader of this file
+        // has already been told to treat the table as the operator's record.
+        // The raw press time is still journalled per mark, so the offset
+        // remains recoverable without stating it in a file meant for an LLM.
         foreach (var mark in marks)
         {
             if (!mark.AutoClosed) continue;
@@ -255,7 +337,7 @@ public static class MarkdownExporter
             sb.Append("- ").Append(note).Append('\n');
         }
 
-        AppendAgentInstructions(sb, part, partCount, segments.Count > 0);
+        AppendAgentInstructions(sb, part, partCount, segments.Count > 0, whole);
 
         return sb.ToString();
     }
@@ -283,9 +365,9 @@ public static class MarkdownExporter
     /// bilingual.
     /// </summary>
     private static void AppendAgentInstructions(StringBuilder sb, AudioPart part, int partCount,
-                                                bool hasTranscript)
+                                                bool hasTranscript, bool whole)
     {
-        var split = partCount > 1;
+        var split = partCount > 1 && !whole;
 
         sb.Append("\n## Agent Instructions\n\n");
         sb.Append("You are an AI agent. This file records **who held the floor and when**.\n");
@@ -299,7 +381,7 @@ public static class MarkdownExporter
         sb.Append("**Route A — you have the audio");
         if (hasTranscript) sb.Append(" (preferred)");
         sb.Append(".**\n");
-        sb.Append(split
+        sb.Append(split || whole
             ? "The session's " + partCount + " MP3 files are present.\n"
             : "The MP3 named in `audio_file` is present.\n");
         sb.Append("Transcribe the audio yourself and align it to the speaker rows above, per\n");
@@ -359,6 +441,14 @@ public static class MarkdownExporter
               .Append(" into a single `transcript.md`\n");
             sb.Append("covering the whole session — not one per part. They already share one\n");
             sb.Append("timebase, so the times line up across files with no adjustment.\n\n");
+        }
+        else if (whole)
+        {
+            sb.Append("The audio came as ").Append(partCount)
+              .Append(" MP3 files, but this document already covers the whole\n");
+            sb.Append("session. Write one `transcript.md` from it — do not produce one per\n");
+            sb.Append("audio file, and do not go looking for the per-part Markdown files: they\n");
+            sb.Append("hold the same marks, cut up.\n\n");
         }
         sb.Append("Write every timestamp in the same `HH:MM:SS.mmm` form and on the same\n");
         sb.Append("timebase as this file, so the two can be read side by side. Then write\n");

@@ -102,6 +102,74 @@ are recognised, a few seconds behind the room, with each line's timecode in
 the colour of whoever was marked at that moment. Scroll it back to re-read;
 it stops following the live edge until you scroll to the bottom again.
 
+### Running it on the GPU
+
+Speech recognition works on the CPU with no setup at all, but it runs at
+roughly the speed of the meeting itself — so on a long meeting the live
+transcript settles about twenty seconds behind the room. On an NVIDIA GPU the
+same model runs several times faster than real time and the strip stays within
+a few seconds. **The words are identical either way; only the delay changes.**
+
+`VoxMark.exe` already carries the CUDA engine (`ggml-cuda-whisper.dll`, about
+390 MB of the download). What it does **not** carry are NVIDIA's own CUDA 12
+libraries — `cudart64_12.dll`, `cublas64_12.dll` and `cublasLt64_12.dll` —
+which come to roughly 700 MB between them and would quadruple a file whose
+whole point is being one small exe. Those have to be on the machine, and
+**the NVIDIA display driver does not install them**: it provides `nvcuda.dll`
+and nothing else. If they are missing the CUDA engine cannot load, VoxMark
+falls back to the CPU, and the setup screen says so before you start.
+
+**How to tell which one you are on:** the line under *Live transcription* on
+the setup screen, or **Settings → Speech recognition**. During a recording,
+the status beside the transcript strip reads `… / CUDA` or `… / CPU`.
+
+**Requirements:** an NVIDIA GPU and driver 527 or newer (run `nvidia-smi` — the
+"CUDA Version" it prints is the highest your driver supports, and it needs to
+be 12.0 or above). VRAM is rarely the limit: `small.en` needs about 1 GB.
+
+Then pick whichever route your machine allows.
+
+**Route 1 — install the CUDA runtime.** Download the *CUDA Toolkit 12.x*
+installer from NVIDIA, choose **Custom**, and untick everything except
+**CUDA → Runtime**. That puts the three libraries on the PATH and VoxMark
+finds them on the next start. Nothing else about VoxMark changes.
+
+**Route 2 — copy three files (no installer, no admin).** For a machine that
+cannot run the NVIDIA installer, copy the three DLLs into:
+
+```
+Documents\VoxMark\cuda\
+```
+
+VoxMark adds that folder to its own search path at startup — nothing is
+written to the system, and no other program is affected. The files live in
+`%CUDA_PATH%\bin\` on any machine with the toolkit installed, and are also
+in NVIDIA's `nvidia-cuda-runtime-cu12` and `nvidia-cublas-cu12` redistributable
+packages. Copy them from a machine that has them the same way you copied the
+model file across.
+
+**Anywhere else is fine too.** The three files come to about 700 MB, so if the
+C: drive is tight, put them on another drive and point VoxMark at it:
+**Settings → Speech recognition → CUDA libraries → Browse…** (`D:\cuda\`, a
+network share you have mapped, anywhere). **Reset** goes back to the folder
+under Documents. VoxMark only adds whichever folder you name to its own search
+path and never writes to it, so the same folder can be shared with other
+software.
+
+> **Tip — keeping it off a full C: drive.** A single-file exe unpacks itself
+> into `%TEMP%\.net\VoxMark\` on first run, and the full build's CUDA engine
+> makes that about 400 MB *per version you have run*. Old folders there are
+> never cleaned up automatically; deleting all but the newest is safe — the
+> next start simply unpacks again.
+>
+> To move the unpacking itself off C:, set the environment variable
+> `DOTNET_BUNDLE_EXTRACT_BASE_DIR` to a folder on another drive before
+> launching (`setx DOTNET_BUNDLE_EXTRACT_BASE_DIR D:\voxmark-temp`, then open a
+> new session). That is read by the .NET host before VoxMark starts, so it
+> cannot be a setting inside the app. Between that, **Save recordings to**, the
+> model file and **CUDA libraries**, everything large VoxMark touches can live
+> on a different drive.
+
 ## Where your recordings go
 
 Everything stays on the machine that recorded it, under your Documents
@@ -203,6 +271,26 @@ timebase: offset from the start of part 1, continuing across every part;
 
 A turn that runs across a boundary appears in both files, cut at the
 boundary, so no speech is lost.
+
+Alongside those per-part files, a split session also writes one
+`..._full.md` covering the **whole meeting** — every mark, gap and transcript
+line on one continuous timeline, with a list of which MP3 holds which stretch
+of audio:
+
+```yaml
+audio_file: 4 files — see audio_files
+audio_files:
+  - file: weekly-product-review_2026-03-12_part01.mp3
+    start: 00:00:00.000
+    end: 00:15:00.000
+  ...
+audio_parts: 4 (this file covers all of them)
+```
+
+That is the file to hand an LLM: it says the same thing as the four together,
+without asking anything to stitch them back into one meeting. The audio is
+*not* joined — merging MP3s would mean re-encoding them, and a single large
+file is usually the thing the split was avoiding.
 
 ## Build from source
 

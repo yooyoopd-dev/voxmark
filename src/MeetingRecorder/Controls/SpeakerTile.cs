@@ -46,6 +46,7 @@ public sealed class SpeakerTile : Border
     private readonly Border? _talkTrack;
     private readonly Border? _talkFill;
     private readonly Border _colourBar;
+    private readonly StackPanel _cardActions;
 
     private bool _isOpen;
 
@@ -116,9 +117,31 @@ public sealed class SpeakerTile : Border
             Visibility = Visibility.Collapsed,
         };
 
-        var top = new StackPanel { Orientation = Orientation.Horizontal };
+        // Rename and remove live in the tile's own top-right corner, which is
+        // the only place they can be without competing with the tile's real
+        // job: the whole card is one big mark button, so these two are drawn
+        // faint until the pointer is on the card and they swallow their own
+        // click, and neither of them marks anybody.
+        _cardActions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = RestingActionOpacity,
+        };
+        _cardActions.Children.Add(IconButton("✎", "Rename this speaker", () => EditRequested?.Invoke(_speaker.SlotIndex)));
+        _cardActions.Children.Add(IconButton("✕", "Remove this speaker", () => DeleteRequested?.Invoke(_speaker.SlotIndex)));
+
+        var top = new Grid();
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_key, 0);
+        Grid.SetColumn(_name, 1);
+        Grid.SetColumn(_cardActions, 2);
         top.Children.Add(_key);
         top.Children.Add(_name);
+        top.Children.Add(_cardActions);
 
         var bottom = new Grid();
         bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -208,13 +231,75 @@ public sealed class SpeakerTile : Border
         if (speaker.IsAbsent) Opacity = 0.45;
 
         MouseLeftButtonUp += (_, _) => Tapped?.Invoke(_speaker.SlotIndex);
-        MouseEnter += (_, _) => { if (!_isOpen) BorderBrush = Palette.AccentEdgeBrush; };
-        MouseLeave += (_, _) => { if (!_isOpen) BorderBrush = Palette.HairlineBrush; };
+        MouseEnter += (_, _) =>
+        {
+            if (!_isOpen) BorderBrush = Palette.AccentEdgeBrush;
+            _cardActions.Opacity = 1;
+        };
+        MouseLeave += (_, _) =>
+        {
+            if (!_isOpen) BorderBrush = Palette.HairlineBrush;
+            _cardActions.Opacity = RestingActionOpacity;
+        };
     }
 
     public event Action<int>? Tapped;
 
+    /// <summary>The ✎ icon: rename this speaker without marking them.</summary>
+    public event Action<int>? EditRequested;
+
+    /// <summary>The ✕ icon: remove this speaker without marking them.</summary>
+    public event Action<int>? DeleteRequested;
+
     public int SlotIndex => _speaker.SlotIndex;
+
+    /// <summary>Visible enough to be discovered, faint enough not to compete with the name.</summary>
+    private const double RestingActionOpacity = 0.3;
+
+    /// <summary>
+    /// A corner icon. Deliberately a <see cref="Border"/> rather than a
+    /// <see cref="Button"/>: the click has to be marked handled before it
+    /// bubbles into the tile, and doing that on the same event the tile
+    /// listens to is more obvious here than relying on a control template's
+    /// internals to do it.
+    /// </summary>
+    private static Border IconButton(string glyph, string tooltip, Action onClick)
+    {
+        var icon = new Border
+        {
+            Width = 22,
+            Height = 22,
+            CornerRadius = new CornerRadius(5),
+            Background = Palette.WellBrush,
+            BorderBrush = Palette.HairlineBrush,
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(4, 0, 0, 0),
+            Cursor = Cursors.Hand,
+            ToolTip = tooltip,
+            Child = new TextBlock
+            {
+                Text = glyph,
+                FontSize = 11,
+                Foreground = Palette.TextMutedBrush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+
+        icon.MouseEnter += (_, _) => icon.BorderBrush = Palette.AccentEdgeBrush;
+        icon.MouseLeave += (_, _) => icon.BorderBrush = Palette.HairlineBrush;
+
+        // Both halves of the click are swallowed. Only Up reaches the tile's
+        // own handler, but leaving Down to pass through would still let a
+        // future press-to-mark change turn a rename into a mark.
+        icon.MouseLeftButtonDown += (_, e) => e.Handled = true;
+        icon.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            onClick();
+        };
+        return icon;
+    }
 
     public void SetKeyLabel(string label) => _key.Text = label;
 

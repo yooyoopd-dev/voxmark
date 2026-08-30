@@ -76,6 +76,16 @@ public sealed class TranscriptionService : IDisposable
     /// <summary>Model name, language and runtime, verbatim for the Markdown.</summary>
     public string Description { get; private set; } = "";
 
+    /// <summary>
+    /// Set when recognition started but not on the engine this machine could
+    /// have used — in practice an NVIDIA machine that fell back to the CPU
+    /// because the CUDA libraries are not installed. Not a failure: the
+    /// meeting transcribes either way, it just runs about five times slower,
+    /// and the operator is owed the reason rather than being left to wonder
+    /// why the live text is a long way behind the room.
+    /// </summary>
+    public string? RuntimeWarning { get; private set; }
+
     /// <summary>Seconds of audio dropped because recognition could not keep up. Never hidden.</summary>
     public double DroppedSeconds { get; private set; }
 
@@ -133,6 +143,11 @@ public sealed class TranscriptionService : IDisposable
                           (_options.TranscriptionLanguage.Length > 0 ? _options.TranscriptionLanguage : "en") + " / " +
                           WhisperRuntime.LoadedRuntimeLabel;
 
+            // The factory is built, so the loader has run and the answer is
+            // real rather than predicted — the one moment this can be known
+            // for certain.
+            DiagnoseRuntime();
+
             _worker = new Thread(Run)
             {
                 IsBackground = true,
@@ -149,6 +164,36 @@ public sealed class TranscriptionService : IDisposable
         catch (Exception ex)
         {
             return Fault("Speech recognition could not start: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Record which engine actually loaded, and say so when it is the slow
+    /// one on a machine that could have done better. Whisper.net falls back
+    /// from CUDA to the CPU silently, and that fallback costs roughly a
+    /// five-fold slowdown — the difference between a transcript a few seconds
+    /// behind the room and one twenty seconds behind it.
+    /// </summary>
+    private void DiagnoseRuntime()
+    {
+        try
+        {
+            var gpu = WhisperRuntime.InspectGpu();
+            AppPaths.Note("Speech recognition loaded the " + WhisperRuntime.LoadedRuntimeLabel +
+                          " engine from " + (WhisperRuntime.RuntimeRoot ?? "an unknown location") + ".\n" +
+                          "NVIDIA driver: " + (gpu.HasNvidiaDriver ? "yes" : "no") +
+                          " · CUDA engine in this build: " + (gpu.HasCudaBackend ? "yes" : "no") +
+                          " · CUDA libraries: " + (gpu.Missing.Count == 0
+                              ? "found in " + (gpu.LibrariesFoundIn ?? "the search path")
+                              : "missing " + string.Join(", ", gpu.Missing)));
+
+            if (!string.Equals(WhisperRuntime.LoadedRuntimeLabel, "CPU", StringComparison.OrdinalIgnoreCase)) return;
+
+            RuntimeWarning = WhisperRuntime.GpuAdvice(gpu);
+        }
+        catch (Exception)
+        {
+            // Diagnostics never get to affect whether recognition runs.
         }
     }
 
@@ -173,6 +218,15 @@ public sealed class TranscriptionService : IDisposable
         {
             var mono = ToMono(buffer, bytesRecorded, format);
             if (mono.Length == 0) return;
+
+            // A replacement input device after an unplug can deliver a
+            // different sample rate, and this pipeline's whole timebase is
+            // "frames consumed ÷ the rate it started at". Re-stretching the
+            // buffer to that rate keeps every segment time honest; the
+            // interpolation is crude, but it is a recovery path, and a
+            // slightly rougher chunk is worth far more than a transcript
+            // whose clock has quietly drifted away from the marks.
+            if (format.SampleRate != _sourceSampleRate) mono = Restretch(mono, format.SampleRate);
 
             lock (_lock)
             {
@@ -201,6 +255,32 @@ public sealed class TranscriptionService : IDisposable
         {
             // Whatever went wrong here, it does not get to reach the encoder.
         }
+    }
+
+    /// <summary>
+    /// Linearly resample a mono buffer from <paramref name="sourceRate"/> to
+    /// the rate this pipeline was started at. Only ever reached after the
+    /// input device changed mid-meeting.
+    /// </summary>
+    private float[] Restretch(float[] mono, int sourceRate)
+    {
+        if (sourceRate <= 0 || mono.Length == 0) return mono;
+
+        var ratio = _sourceSampleRate / (double)sourceRate;
+        var length = (int)(mono.Length * ratio);
+        if (length <= 0) return Array.Empty<float>();
+
+        var stretched = new float[length];
+        for (var i = 0; i < length; i++)
+        {
+            var at = i / ratio;
+            var low = (int)at;
+            var high = Math.Min(mono.Length - 1, low + 1);
+            var fraction = (float)(at - low);
+            stretched[i] = mono[low] + (mono[high] - mono[low]) * fraction;
+        }
+
+        return stretched;
     }
 
     /// <summary>

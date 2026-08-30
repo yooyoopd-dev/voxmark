@@ -4,8 +4,8 @@ using System.Text.Json;
 namespace MeetingRecorder.Services;
 
 /// <summary>
-/// The transcription choices that outlive one meeting: which model file, and
-/// whether the toggle starts on. Sits beside <c>presets.json</c> in the app
+/// The transcription choices that outlive one meeting: which model file, which
+/// language, where the CUDA libraries are, and whether the toggle starts on. Sits beside <c>presets.json</c> in the app
 /// folder for the same reason presets do — picking a model once is setup, and
 /// re-picking it before every meeting would be a chore, not a decision.
 ///
@@ -23,6 +23,15 @@ public static class TranscriptionSettingsStore
 
         /// <summary>Whether the setup screen's toggle starts on.</summary>
         public bool Enabled { get; set; }
+
+        /// <summary>
+        /// Folder holding NVIDIA's CUDA 12 libraries, or empty for the
+        /// default <c>Documents\VoxMark\cuda</c>. Settable because those
+        /// three files come to about 700 MB and a machine whose C: drive is
+        /// tight has every reason to keep them on another one — the same
+        /// argument that made the save location settable.
+        /// </summary>
+        public string CudaPath { get; set; } = "";
 
         public string Language { get; set; } = "en";
     }
