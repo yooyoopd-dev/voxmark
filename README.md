@@ -154,11 +154,19 @@ under Documents. VoxMark only adds whichever folder you name to its own search
 path and never writes to it, so the same folder can be shared with other
 software.
 
-> **Tip — reclaiming disk space.** A single-file exe unpacks itself into
-> `%TEMP%\.net\VoxMark\` on first run, and the full build's CUDA engine makes
-> that about 400 MB *per version you have run*. Old folders there are never
-> cleaned up automatically; deleting all but the newest is safe — the next
-> start simply unpacks again.
+> **Tip — keeping it off a full C: drive.** A single-file exe unpacks itself
+> into `%TEMP%\.net\VoxMark\` on first run, and the full build's CUDA engine
+> makes that about 400 MB *per version you have run*. Old folders there are
+> never cleaned up automatically; deleting all but the newest is safe — the
+> next start simply unpacks again.
+>
+> To move the unpacking itself off C:, set the environment variable
+> `DOTNET_BUNDLE_EXTRACT_BASE_DIR` to a folder on another drive before
+> launching (`setx DOTNET_BUNDLE_EXTRACT_BASE_DIR D:\voxmark-temp`, then open a
+> new session). That is read by the .NET host before VoxMark starts, so it
+> cannot be a setting inside the app. Between that, **Save recordings to**, the
+> model file and **CUDA libraries**, everything large VoxMark touches can live
+> on a different drive.
 
 ## Where your recordings go
 
