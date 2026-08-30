@@ -1149,11 +1149,18 @@ public sealed class SetupWindow : ShellWindow
             return;
         }
 
-        _transcribeStatus.Text = _transcriptionPreferred
+        // Where it will run is worth knowing here rather than mid-meeting: this
+        // is the last screen on which the operator can still install anything.
+        // Only the slow case is named — an engine that is about to do its job
+        // properly does not need announcing.
+        var slow = WhisperRuntime.GpuHint(WhisperRuntime.InspectGpu());
+
+        _transcribeStatus.Text = (_transcriptionPreferred
             ? "Ready — words are recognised on this PC while you mark, and land in the Markdown "
               + "under the speaker you marked."
-            : "A model is ready. Turn this on to transcribe while you record.";
-        _transcribeStatus.Foreground = Palette.TextMutedBrush;
+            : "A model is ready. Turn this on to transcribe while you record.")
+            + (slow is null ? "" : " " + slow);
+        _transcribeStatus.Foreground = slow is null ? Palette.TextMutedBrush : Palette.WarnBrush;
     }
 
     private void RememberTranscription() => TranscriptionSettingsStore.Save(new TranscriptionSettingsStore.Settings

@@ -36,6 +36,7 @@ public sealed class SettingsWindow : ShellWindow
 #if !VOXMARK_LITE
     private readonly TextBlock _modelName;
     private readonly TextBlock _modelStatus;
+    private readonly TextBlock _gpuStatus;
     private readonly Dropdown _language;
 #endif
 
@@ -96,6 +97,7 @@ public sealed class SettingsWindow : ShellWindow
         _modelName = Ui.Mono("—", 12.5, Palette.TextBodyBrush);
         _modelName.TextTrimming = TextTrimming.CharacterEllipsis;
         _modelStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
+        _gpuStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
 
         _language = new Dropdown("ChipButton") { MinHeight = 26, PopupMinWidth = 160 };
         _language.SetItems(new (string, object)[]
@@ -256,7 +258,8 @@ public sealed class SettingsWindow : ShellWindow
             11.5, Palette.TextMutedBrush);
         note.Margin = new Thickness(0, 10, 0, 0);
 
-        return Card(Ui.Vertical(0, Pad(modelRow), Pad(_modelStatus, 4), Ui.Rule(), Pad(languageRow), note));
+        return Card(Ui.Vertical(0, Pad(modelRow), Pad(_modelStatus, 4), Pad(_gpuStatus, 4),
+                                Ui.Rule(), Pad(languageRow), note));
     }
 #endif
 
@@ -446,6 +449,18 @@ public sealed class SettingsWindow : ShellWindow
         _modelStatus.Text = trouble ??
             "Ready — turn Live transcription on for a meeting and the words are recognised on this PC.";
         _modelStatus.Foreground = trouble is null ? Palette.TextMutedBrush : Palette.WarnBrush;
+
+        // Which engine this PC will use, on the other hand, *is* knowable
+        // without a factory: it is a question about files on disk. It belongs
+        // here because it is a property of the machine, and because a CPU
+        // fallback costs about a five-fold slowdown that the operator can
+        // often fix once and never think about again.
+        var gpu = WhisperRuntime.InspectGpu();
+        var slow = WhisperRuntime.GpuAdvice(gpu);
+        if (slow is not null) WhisperRuntime.EnsureCudaFolder();
+
+        _gpuStatus.Text = WhisperRuntime.GpuSummary(gpu);
+        _gpuStatus.Foreground = slow is null ? Palette.TextMutedBrush : Palette.WarnBrush;
     }
 
     /// <summary>

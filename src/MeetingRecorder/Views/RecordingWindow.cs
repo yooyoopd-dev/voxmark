@@ -564,6 +564,18 @@ public sealed class RecordingWindow : ShellWindow
         }
 
         _session.TranscriptionDescription = _transcription.Description;
+
+        // Recognition is running, so this is not the failure path — but an
+        // NVIDIA machine that fell back to the CPU is about five times slower
+        // than it should be, and the operator would otherwise only see that
+        // as a transcript drifting further behind the room.
+        // Never over the top of a notice that is already up: a device that
+        // failed to open is worse news than an engine that is merely slow.
+        if (_transcription.RuntimeWarning is { } warning && _noticeBanner.Visibility != Visibility.Visible)
+        {
+            ShowNotice(warning);
+        }
+
         _capture.PcmAvailable += _transcription.Push;
 #endif
     }

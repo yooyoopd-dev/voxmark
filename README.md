@@ -100,6 +100,58 @@ are recognised, a few seconds behind the room, with each line's timecode in
 the colour of whoever was marked at that moment. Scroll it back to re-read;
 it stops following the live edge until you scroll to the bottom again.
 
+### Running it on the GPU
+
+Speech recognition works on the CPU with no setup at all, but it runs at
+roughly the speed of the meeting itself — so on a long meeting the live
+transcript settles about twenty seconds behind the room. On an NVIDIA GPU the
+same model runs several times faster than real time and the strip stays within
+a few seconds. **The words are identical either way; only the delay changes.**
+
+`VoxMark.exe` already carries the CUDA engine (`ggml-cuda-whisper.dll`, about
+390 MB of the download). What it does **not** carry are NVIDIA's own CUDA 12
+libraries — `cudart64_12.dll`, `cublas64_12.dll` and `cublasLt64_12.dll` —
+which come to roughly 700 MB between them and would quadruple a file whose
+whole point is being one small exe. Those have to be on the machine, and
+**the NVIDIA display driver does not install them**: it provides `nvcuda.dll`
+and nothing else. If they are missing the CUDA engine cannot load, VoxMark
+falls back to the CPU, and the setup screen says so before you start.
+
+**How to tell which one you are on:** the line under *Live transcription* on
+the setup screen, or **Settings → Speech recognition**. During a recording,
+the status beside the transcript strip reads `… / CUDA` or `… / CPU`.
+
+**Requirements:** an NVIDIA GPU and driver 527 or newer (run `nvidia-smi` — the
+"CUDA Version" it prints is the highest your driver supports, and it needs to
+be 12.0 or above). VRAM is rarely the limit: `small.en` needs about 1 GB.
+
+Then pick whichever route your machine allows.
+
+**Route 1 — install the CUDA runtime.** Download the *CUDA Toolkit 12.x*
+installer from NVIDIA, choose **Custom**, and untick everything except
+**CUDA → Runtime**. That puts the three libraries on the PATH and VoxMark
+finds them on the next start. Nothing else about VoxMark changes.
+
+**Route 2 — copy three files (no installer, no admin).** For a machine that
+cannot run the NVIDIA installer, copy the three DLLs into:
+
+```
+Documents\VoxMark\cuda\
+```
+
+VoxMark adds that folder to its own search path at startup — nothing is
+written to the system, and no other program is affected. The files live in
+`%CUDA_PATH%\bin\` on any machine with the toolkit installed, and are also
+in NVIDIA's `nvidia-cuda-runtime-cu12` and `nvidia-cublas-cu12` redistributable
+packages. Copy them from a machine that has them the same way you copied the
+model file across.
+
+> **Tip — reclaiming disk space.** A single-file exe unpacks itself into
+> `%TEMP%\.net\VoxMark\` on first run, and the full build's CUDA engine makes
+> that about 400 MB *per version you have run*. Old folders there are never
+> cleaned up automatically; deleting all but the newest is safe — the next
+> start simply unpacks again.
+
 ## Where your recordings go
 
 Everything stays on the machine that recorded it, under your Documents

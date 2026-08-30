@@ -224,6 +224,28 @@ intact instead of flattening it. If transcription ever stops finding its
 engine, start there, and remember `Documents\VoxMark\whisper-runtime\` is the
 manual override.
 
+### The GPU is opt-in by what the machine already has
+
+The Full exe carries whisper.cpp's CUDA engine (`ggml-cuda-whisper.dll`, ~390
+MB extracted) but **not** NVIDIA's `cudart64_12` / `cublas64_12` /
+`cublasLt64_12`, which are ~700 MB between them — bundling them would
+quadruple an exe whose requirement is being one small file. So the CUDA
+backend loads only on a machine that already has them, and Whisper.net falls
+back to the CPU **silently** when it cannot. That fallback costs roughly a
+five-fold slowdown, which shows up to the operator only as a live transcript
+drifting further behind the room, so it is named in three places instead:
+predicted on Setup and in Settings by `WhisperRuntime.InspectGpu` (a
+files-on-disk check, no factory needed), and confirmed from
+`TranscriptionService.DiagnoseRuntime` once the loader has actually run, which
+also writes the full picture to the Settings Log.
+
+`Documents\VoxMark\cuda\` is the escape hatch for a machine that cannot run
+NVIDIA's installer — drop the three DLLs there and `Probe` puts the folder on
+the process PATH before whisper is loaded. Process-local, nothing written to
+the system. **Don't "fix" any of this by bundling the CUDA libraries**, and
+don't remove the fallback notice: a five-times-slower engine that says nothing
+is the failure mode this exists to prevent.
+
 ### Timestamps
 
 Segment times must land on the same timebase as the marks or the whole
