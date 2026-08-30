@@ -90,6 +90,22 @@ public sealed class RecordingWindow : ShellWindow
     private readonly Border _dockHost;
 
     /// <summary>
+    /// The rename / remove card, shown over the tile it belongs to. A popup
+    /// rather than a dialog for the same reason the dock has no modals
+    /// (section 06): the recording UI never disappears, and nothing here can
+    /// block the operator from marking the next speaker — Esc or a click
+    /// elsewhere dismisses it, and the global hotkeys keep working while it
+    /// is open.
+    /// </summary>
+    private readonly Popup _cardPopup = new()
+    {
+        Placement = PlacementMode.Center,
+        StaysOpen = false,
+        AllowsTransparency = true,
+        PopupAnimation = PopupAnimation.Fade,
+    };
+
+    /// <summary>
     /// The live transcript strip and its header. Present only when speech
     /// recognition is actually running: an empty strip would cost the speaker
     /// grid height for nothing.
@@ -244,6 +260,11 @@ public sealed class RecordingWindow : ShellWindow
         Closing += OnClosing;
         PreviewKeyDown += OnPreviewKeyDown;
         Activated += (_, _) => _toast.HideNow();
+
+        // A popup lives in its own window, so it would otherwise stay on
+        // screen after this one is minimised into the background — with the
+        // tile it belongs to nowhere in sight.
+        StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) CloseCardPopup(); };
 
         SourceInitialized += (_, _) => StartRecording(deviceNumber);
     }
@@ -436,6 +457,8 @@ public sealed class RecordingWindow : ShellWindow
         {
             var tile = new SpeakerTile(speaker, density, _compactLayout) { Margin = new Thickness(5) };
             tile.Tapped += slot => ToggleSpeaker(slot, viaHotkey: false);
+            tile.EditRequested += ShowRenameCard;
+            tile.DeleteRequested += ShowRemoveCard;
             _tileGrid.Children.Add(tile);
             _tiles[speaker.SlotIndex] = tile;
         }
@@ -625,17 +648,7 @@ public sealed class RecordingWindow : ShellWindow
             : "";
         UpdatePartLabel();
 
-        if (_marking.ActiveSlot is int slot)
-        {
-            var speaker = _session.SpeakerForSlot(slot);
-            _speakingNow.Text = speaker?.Name ?? "unknown";
-            _speakingNow.Foreground = Palette.BrushForSlot(slot);
-        }
-        else
-        {
-            _speakingNow.Text = _capture.IsPaused ? "paused" : "nobody";
-            _speakingNow.Foreground = Palette.TextMutedBrush;
-        }
+        UpdateSpeakingNow();
 
         _waveform.CurrentSeconds = elapsed;
         _waveform.IsPaused = _capture.IsPaused;
@@ -666,6 +679,22 @@ public sealed class RecordingWindow : ShellWindow
         }
     }
 
+    /// <summary>The header's "Speaking now", which is also what a reassign changes.</summary>
+    private void UpdateSpeakingNow()
+    {
+        if (_marking.ActiveSlot is int slot)
+        {
+            var speaker = _session.SpeakerForSlot(slot);
+            _speakingNow.Text = speaker?.Name ?? "unknown";
+            _speakingNow.Foreground = Palette.BrushForSlot(slot);
+        }
+        else
+        {
+            _speakingNow.Text = _capture.IsPaused ? "paused" : "nobody";
+            _speakingNow.Foreground = Palette.TextMutedBrush;
+        }
+    }
+
     /// <summary>
     /// Move recognised lines onto the session and into the strip. The speaker
     /// colour is resolved against the marks as they stand right now, so the
@@ -677,9 +706,41 @@ public sealed class RecordingWindow : ShellWindow
         {
             _session.Transcript.Add(segment);
 
-            var mark = TranscriptMapper.MarkFor(segment, _marking.Marks);
+            var mark = TranscriptMapper.MarkFor(segment, AttributionMarks());
             _transcriptView?.Append(segment, mark is not null ? Palette.ForSlot(mark.SpeakerSlot) : (Color?)null);
         }
+    }
+
+    /// <summary>
+    /// The marks a transcript line is coloured against: the closed ones, plus
+    /// whatever is open right now standing in for the mark it will become.
+    ///
+    /// Without the open ones a line recognised during the current turn has
+    /// nobody to belong to and is drawn grey until the operator closes the
+    /// mark — which is exactly the stretch they are watching, and exactly when
+    /// a reassign has to be visible. The stand-ins are throwaway: negative ids
+    /// so they can never be confused with a journalled mark, and rebuilt on
+    /// every call rather than stored.
+    /// </summary>
+    private IReadOnlyList<Mark> AttributionMarks()
+    {
+        if (_marking.Open.Count == 0) return _marking.Marks;
+
+        var now = _capture.ElapsedSeconds;
+        var marks = _marking.Marks.ToList();
+        var id = 0L;
+        foreach (var open in _marking.Open)
+        {
+            marks.Add(new Mark
+            {
+                Id = --id,
+                SpeakerSlot = open.SpeakerSlot,
+                StartSeconds = open.StartSeconds,
+                EndSeconds = Math.Max(open.StartSeconds, now),
+            });
+        }
+
+        return marks;
     }
 
     /// <summary>
@@ -777,6 +838,17 @@ public sealed class RecordingWindow : ShellWindow
         _dock.Refresh();
         _markCount.Text = _marking.Marks.Count.ToString();
 
+        // Reassigning the live mark from the dock has to land everywhere at
+        // once, not on the next tick: the header, the tile that is lit, and
+        // the flag over the waveform all name the speaker the operator just
+        // corrected. A tenth of a second late reads as "did that work?", and
+        // the operator asks again.
+        var elapsed = _capture.ElapsedSeconds;
+        UpdateSpeakingNow();
+        UpdateTiles(elapsed);
+        _waveform.SetBoundaries(BuildBoundaries(elapsed));
+        _waveform.InvalidateVisual();
+
         // A live-repair edit (reassign, nudge, merge, split, delete,
         // undo/redo) can change which mark a transcript line was resolved
         // against; already-drawn lines otherwise keep the colour they were
@@ -784,7 +856,8 @@ public sealed class RecordingWindow : ShellWindow
         // here is cheap — only the timecode labels repaint — and this fires
         // on every marking change regardless of edition, so it's a no-op
         // (null strip) whenever transcription isn't running.
-        _transcriptView?.RecolorAll(s => TranscriptMapper.MarkFor(s, _marking.Marks) is { } m
+        var attribution = AttributionMarks();
+        _transcriptView?.RecolorAll(s => TranscriptMapper.MarkFor(s, attribution) is { } m
             ? Palette.ForSlot(m.SpeakerSlot)
             : (Color?)null);
     }
@@ -858,6 +931,21 @@ public sealed class RecordingWindow : ShellWindow
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // While a tile's rename card is open the digits belong to the name
+        // being typed, not to the roster. Esc closes it; everything else is
+        // left to the card's own field and buttons. The Alt+n global hotkeys
+        // are registered with Windows and never come through here, so marking
+        // by hotkey still works with the card open.
+        if (_cardPopup.IsOpen)
+        {
+            if (e.Key == Key.Escape)
+            {
+                CloseCardPopup();
+                e.Handled = true;
+            }
+            return;
+        }
+
         if (_addStrip.Visibility == Visibility.Visible)
         {
             if (e.Key == Key.Enter) { CommitAddSpeaker(); e.Handled = true; }
@@ -1023,6 +1111,182 @@ public sealed class RecordingWindow : ShellWindow
         SessionStore.Save(_session);
     }
 
+    // --------------------------------------------------- rename / remove card
+
+    /// <summary>
+    /// Rename the speaker on one tile. The roster slot, the key, the colour
+    /// and every mark already made against it are untouched — only the label
+    /// changes, which is what makes this safe to do mid-meeting: the operator
+    /// misheard a name, not who was talking.
+    /// </summary>
+    private void ShowRenameCard(int slot)
+    {
+        if (_stopping) return;
+        if (_session.SpeakerForSlot(slot) is not { } speaker) return;
+        if (!_tiles.TryGetValue(slot, out var tile)) return;
+
+        var field = new TextBox
+        {
+            Text = speaker.Name,
+            FontSize = 15,
+            MinWidth = 200,
+            Foreground = Palette.TextBrush,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+        };
+
+        void Commit()
+        {
+            var name = field.Text.Trim();
+            CloseCardPopup();
+            if (name.Length == 0 || name == speaker.Name) return;
+
+            speaker.Name = name;
+            if (_tiles.TryGetValue(slot, out var renamed)) renamed.SetName(name);
+
+            // Everything that prints a name reads it from the roster, so the
+            // dock, the toast and the waveform flags only need telling that
+            // it changed.
+            _toast.SetRoster(_session.Speakers);
+            _dock.Refresh();
+            _dock.ShowNotice("Renamed to " + name, false);
+            PersistSession(_capture.ElapsedSeconds);
+        }
+
+        field.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { Commit(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { CloseCardPopup(); e.Handled = true; }
+        };
+
+        var save = Ui.MakeButton("Save", "Enter", "ChipButtonAccent", (_, _) => Commit());
+        var cancel = Ui.MakeButton("Cancel", "Esc", "ChipButton", (_, _) => CloseCardPopup());
+        cancel.Margin = new Thickness(8, 0, 0, 0);
+
+        var body = Ui.Vertical(10,
+            Ui.Section("Rename speaker"),
+            Ui.Well(Ui.Vertical(0, Ui.Text("Name", 10, Palette.TextMutedBrush), field),
+                new Thickness(10, 6, 10, 6), 6),
+            Ui.Columns(0, Ui.Filler(), save, cancel));
+
+        OpenCardPopup(tile, body);
+
+        // The popup builds its own window when it opens, so the field is not
+        // focusable until that has happened — hence the queued focus rather
+        // than one on the line after.
+        Dispatcher.InvokeAsync(() =>
+        {
+            field.Focus();
+            field.SelectAll();
+        }, DispatcherPriority.Input);
+    }
+
+    /// <summary>
+    /// Remove a speaker from the roster, behind two confirmations.
+    ///
+    /// A speaker who has already been marked is not removable, and the second
+    /// step says so rather than asking again: their marks address this slot,
+    /// and a roster without it would export rows attributed to "Unknown". The
+    /// repair for a wrong name is the ✎ beside this, which keeps the marks.
+    /// </summary>
+    private void ShowRemoveCard(int slot)
+    {
+        if (_stopping) return;
+        if (_session.SpeakerForSlot(slot) is not { } speaker) return;
+        if (!_tiles.TryGetValue(slot, out var tile)) return;
+
+        var marked = _marking.Marks.Count(m => m.SpeakerSlot == slot) + (_marking.IsOpen(slot) ? 1 : 0);
+        if (marked > 0)
+        {
+            var rename = Ui.MakeButton("✎ Rename instead", null, "ChipButtonAccent", (_, _) =>
+            {
+                CloseCardPopup();
+                ShowRenameCard(slot);
+            });
+            var close = Ui.MakeButton("Close", "Esc", "ChipButton", (_, _) => CloseCardPopup());
+            close.Margin = new Thickness(8, 0, 0, 0);
+
+            OpenCardPopup(tile, Ui.Vertical(10,
+                Ui.Section("Cannot remove " + speaker.Name, Palette.WarnBrush),
+                Wrapped(marked + (marked == 1 ? " mark is" : " marks are") + " already attributed to " +
+                        speaker.Name + " in this recording. Removing the card would leave those rows " +
+                        "with nobody to name in the export, so the card stays."),
+                Ui.Columns(0, Ui.Filler(), rename, close)));
+            return;
+        }
+
+        ShowRemoveConfirm(tile, speaker, second: false);
+    }
+
+    private void ShowRemoveConfirm(SpeakerTile tile, Speaker speaker, bool second)
+    {
+        var confirm = Ui.MakeButton(second ? "Yes, remove" : "Remove", null, "DangerButton", (_, _) =>
+        {
+            if (second) RemoveSpeaker(speaker);
+            else ShowRemoveConfirm(tile, speaker, second: true);
+        });
+        var cancel = Ui.MakeButton("Cancel", "Esc", "ChipButton", (_, _) => CloseCardPopup());
+        cancel.Margin = new Thickness(8, 0, 0, 0);
+
+        OpenCardPopup(tile, Ui.Vertical(10,
+            Ui.Section(second ? "Remove " + speaker.Name + "?" : "Remove speaker", Palette.RecTextBrush),
+            Wrapped(second
+                ? "This is the second ask. " + speaker.Name + " (" + speaker.KeyLabel +
+                  ") leaves the grid and the key stops marking. Nothing already recorded changes."
+                : speaker.Name + " has not been marked yet, so the card can go. Their slot " +
+                  "number is never reused, so the other speakers keep their colours and keys."),
+            Ui.Columns(0, Ui.Filler(), confirm, cancel)));
+    }
+
+    private void RemoveSpeaker(Speaker speaker)
+    {
+        CloseCardPopup();
+        _session.Speakers.Remove(speaker);
+
+        // The key is free again the moment the card is gone, so the global
+        // registrations are rebuilt rather than left holding it.
+        _hotkeys.UnregisterAll();
+        _hotkeys.Register(_session.Speakers.Select(s => s.Key));
+
+        BuildTiles();
+        _dock.Refresh();
+        _dock.ShowNotice("Removed " + speaker.Name + " from the roster", false);
+        PersistSession(_capture.ElapsedSeconds);
+    }
+
+    private void OpenCardPopup(SpeakerTile tile, UIElement body)
+    {
+        _cardPopup.IsOpen = false;
+        _cardPopup.PlacementTarget = tile;
+
+        var card = Ui.Card(body, new Thickness(14), Palette.AccentBrush);
+        card.BorderThickness = new Thickness(1.5);
+        card.MinWidth = 260;
+        card.Effect = new DropShadowEffect { BlurRadius = 26, ShadowDepth = 4, Opacity = 0.55 };
+        _cardPopup.Child = card;
+        _cardPopup.IsOpen = true;
+    }
+
+    private void CloseCardPopup()
+    {
+        if (!_cardPopup.IsOpen && _cardPopup.Child is null) return;
+
+        _cardPopup.IsOpen = false;
+        _cardPopup.Child = null;
+
+        // The keys go back to marking the moment the card is gone — the same
+        // handover the add-speaker strip makes when it closes.
+        Focus();
+    }
+
+    private static FrameworkElement Wrapped(string text)
+    {
+        var block = Ui.Wrap(text, 12.5, Palette.TextBodyBrush);
+        block.MaxWidth = 300;
+        return block;
+    }
+
     // -------------------------------------------------------------- pause
 
     private void TogglePause()
@@ -1081,6 +1345,7 @@ public sealed class RecordingWindow : ShellWindow
         if (_stopping) return;
         _stopping = true;
 
+        CloseCardPopup();
         _timer.Stop();
         _capture.SlicesAvailable -= OnSlices;
         _capture.DeviceChanged -= OnDeviceChanged;

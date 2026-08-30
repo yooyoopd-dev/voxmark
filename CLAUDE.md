@@ -115,10 +115,21 @@ Implemented, with the guide section each answers to:
 - **04 recording** — live 45 s waveform with chapter-marker flags at every
   speaker change, whole-session minimap with the live viewport, the
   Marks / Speaking now / Input / Written to disk header, dropped-buffer
-  count surfaced rather than swallowed.
+  count surfaced rather than swallowed. The waveform is auto-gained against
+  the loudest thing in the visible window and contrast-shaped, with the gain
+  named in its own label — a room mic sits far below full scale, and a
+  linear trace uses a tenth of the lane however tall the lane is.
 - **05 grid** — column count and tile height derived from speaker count
   alone (2→4 / 5–6 / 7–9 / 10–12), roster order fixed for the session.
-- **06 marks dock** — collapsed live-repair rows and the expanded dock:
+  Each tile carries ✎ rename and ✕ remove in its top-right corner, opening
+  a popup over that tile; both swallow their own click so neither ever
+  marks. Removal is refused for a speaker who already has marks — their
+  rows would have nobody to name — and asks twice otherwise.
+- **06 marks dock** — collapsed live-repair rows and the expanded dock.
+  Collapsed, the mark that is *open right now* leads the list and offers
+  reassign and nothing else: mid-meeting the only correction that cannot
+  wait is who the current turn belongs to, and a reassign there repaints the
+  tile, the waveform flag and the transcript colours immediately. Expanded:
   filters, inline reassign, 0.5 s / 0.1 s nudges, split at the review
   playhead, merge, insert-into-gap, immediate delete with a 6 s undo toast,
   neighbour trimming with a notice, and self-flagged suspects (marks under
@@ -296,6 +307,13 @@ from the start of `audio_file`, not wall-clock) are all load-bearing.
 Don't reshape this without re-reading section 10 and confirming — the
 guide itself flags the format as *its* proposal, not a settled requirement,
 so if it needs to change, that's a real decision, not a refactor.
+
+One deliberate departure from the guide's sample output: the Notes bullet
+reading "Mark starts are shifted N s earlier than the operator's key press"
+is **not** written any more — the user asked for it gone. It described how
+the marks were made rather than what they say, and the raw press time is
+still journalled per mark, so nothing became unrecoverable. Don't restore it
+from the design guide's sample.
 
 The transcript is **additive to that contract, never a change to it**. The
 segments table and the `## Gaps` table are untouched; recognised speech goes

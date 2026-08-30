@@ -226,10 +226,12 @@ public static class MarkdownExporter
             }
         }
 
-        sb.Append("- Mark starts are shifted ")
-          .Append(session.Options.MarkStartOffsetSeconds.ToString("0.#"))
-          .Append(" s earlier than the operator's key press.\n");
-
+        // The mark-start offset is deliberately *not* noted here. The guide's
+        // own sample output carries the line, but it describes how the marks
+        // were made rather than what they say, and every reader of this file
+        // has already been told to treat the table as the operator's record.
+        // The raw press time is still journalled per mark, so the offset
+        // remains recoverable without stating it in a file meant for an LLM.
         foreach (var mark in marks)
         {
             if (!mark.AutoClosed) continue;

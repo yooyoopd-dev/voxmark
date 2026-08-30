@@ -301,6 +301,40 @@ public sealed class MarkingEngine
         return true;
     }
 
+    /// <summary>
+    /// Move the mark that is open right now to another speaker, without
+    /// closing it or touching its start.
+    ///
+    /// The repair for the second most common miss after a late key press:
+    /// the right moment, the wrong person. Reassigning after the fact would
+    /// mean waiting for the turn to end and then hunting for it in the dock,
+    /// by which time the operator has missed the next handover — so the open
+    /// mark is reassignable while it is still open, which is when they
+    /// noticed.
+    ///
+    /// Overlap on, both speakers open: refused rather than silently merging
+    /// two live turns into one speaker, which would lose the one that was
+    /// already right.
+    /// </summary>
+    public bool ReassignOpen(int fromSlot, int toSlot)
+    {
+        if (fromSlot == toSlot) return false;
+
+        var open = _open.FirstOrDefault(o => o.SpeakerSlot == fromSlot);
+        if (open is null) return false;
+
+        if (_open.Any(o => o.SpeakerSlot == toSlot))
+        {
+            Announce(NameOf(toSlot) + " already has a mark open — close one first");
+            return false;
+        }
+
+        var before = Capture();
+        open.SpeakerSlot = toSlot;
+        Commit(before);
+        return true;
+    }
+
     public bool NudgeStart(long id, double delta) =>
         ById(id) is { } m && SetBounds(id, m.StartSeconds + delta, m.EndSeconds);
 

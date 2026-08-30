@@ -67,6 +67,13 @@ public sealed class MarksDock : Border
     private readonly Button _expandButton;
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(6) };
 
+    /// <summary>
+    /// The live rows on screen and the label that counts each one up, so the
+    /// tick can keep them running without rebuilding the dock ten times a
+    /// second. Cleared and refilled by <see cref="Refresh"/>.
+    /// </summary>
+    private readonly List<(OpenMark Open, TextBlock Elapsed)> _liveRows = new();
+
     private string _filter = "all";
     private bool _expanded;
     private long? _editingId;
@@ -164,10 +171,16 @@ public sealed class MarksDock : Border
 
     /// <summary>
     /// Cheap per-frame update: the lane has to keep growing with the
-    /// recording, but rebuilding every row ten times a second would not.
+    /// recording and the open mark's row has to keep counting, but rebuilding
+    /// every row ten times a second would not.
     /// </summary>
     public void UpdateLive(double seconds)
     {
+        foreach (var (open, elapsed) in _liveRows)
+        {
+            elapsed.Text = "◉ " + Math.Max(0, seconds - open.StartSeconds).ToString("0.0") + " s";
+        }
+
         if (!_expanded) return;
         _lane.TotalSeconds = Math.Max(1, seconds);
         _lane.InvalidateVisual();
@@ -259,17 +272,29 @@ public sealed class MarksDock : Border
         _heading.Text = _expanded ? "MARKS · " + all.Count : "MARKS · LIVE REPAIR";
         _subheading.Text = _expanded
             ? "newest first · one row open at a time"
-            : "recording continues while you edit";
+            : "who is marked right now — reassign without stopping";
 
         _lane.TotalSeconds = Math.Max(1, _engine.CurrentFileSeconds);
         _lane.SelectedMarkId = SelectedMarkId;
         _lane.PlayheadSeconds = PlayheadSeconds;
         _lane.SetMarks(_engine.Chronological());
 
-        var visible = VisibleMarks();
         _rowsHost.Children.Clear();
+        _liveRows.Clear();
 
-        if (visible.Count == 0)
+        // Collapsed, the dock answers one question — "who is this going to,
+        // and is that right?" — so the mark that is open right now leads,
+        // even though it is not in the marks list yet. Without it the row an
+        // operator most wants to correct is the one row the dock never shows.
+        var live = _expanded
+            ? Array.Empty<OpenMark>()
+            : _engine.Open.OrderByDescending(o => o.StartSeconds).Take(CollapsedRowCount).ToArray();
+
+        foreach (var open in live) _rowsHost.Children.Add(LiveRow(open));
+
+        var visible = VisibleMarks(CollapsedRowCount - live.Length);
+
+        if (visible.Count == 0 && live.Length == 0)
         {
             _rowsHost.Children.Add(Ui.Text(
                 _expanded ? "No marks match this filter yet" : "No marks yet — press a speaker's key when they start",
@@ -283,10 +308,10 @@ public sealed class MarksDock : Border
         }
     }
 
-    private List<Mark> VisibleMarks()
+    private List<Mark> VisibleMarks(int collapsedRoom = CollapsedRowCount)
     {
         var marks = _engine.NewestFirst().ToList();
-        if (!_expanded) return marks.Take(CollapsedRowCount).ToList();
+        if (!_expanded) return marks.Take(Math.Max(0, collapsedRoom)).ToList();
 
         return _filter switch
         {
@@ -359,16 +384,13 @@ public sealed class MarksDock : Border
         }
         else
         {
-            trailing.Children.Add(SmallAction("start −0.5s", () => _engine.NudgeStart(mark.Id, -0.5)));
-            trailing.Children.Add(SmallAction("end +0.5s", () => _engine.NudgeEnd(mark.Id, 0.5)));
+            // Reassign and nothing else. The boundary nudges and the delete
+            // that used to sit here are a keystroke away (← →, Ctrl+Z) and a
+            // click away in the expanded dock; on a two-row strip glanced at
+            // mid-meeting they were four targets to hit and three of them
+            // changed the timeline. Who a turn belongs to is the correction
+            // that has to be right before the meeting moves on.
             trailing.Children.Add(ReassignDropdown(mark));
-            var remove = SmallAction("✕", () =>
-            {
-                SelectedMarkId = mark.Id;
-                DeleteSelected();
-            });
-            remove.Foreground = Palette.RecBrush;
-            trailing.Children.Add(remove);
         }
 
         // bar · key · name · range · duration · slack · actions
@@ -393,19 +415,67 @@ public sealed class MarksDock : Border
         return card;
     }
 
-    private Button SmallAction(string label, Action action)
+    /// <summary>
+    /// The mark that is open right now, as a row. It has no id and cannot be
+    /// nudged, split or deleted — it has no end yet — so the only thing it
+    /// offers is the one thing that is wrong often enough to matter mid-turn:
+    /// who it belongs to.
+    /// </summary>
+    private UIElement LiveRow(OpenMark open)
     {
-        var button = new Button { Content = label, Margin = new Thickness(0, 0, 6, 0) };
-        if (Application.Current?.TryFindResource("ChipButtonAccent") is Style style) button.Style = style;
-        button.Click += (_, e) =>
+        var colour = Palette.ForSlot(open.SpeakerSlot);
+        var speaker = _session.SpeakerForSlot(open.SpeakerSlot);
+
+        var bar = new Border
         {
-            e.Handled = true;
-            action();
+            Width = 3,
+            CornerRadius = new CornerRadius(2),
+            Background = new SolidColorBrush(colour),
+            Margin = new Thickness(0, 0, 12, 0),
         };
-        return button;
+
+        var key = Ui.Mono(speaker?.KeyLabel ?? "?", 11, Palette.TextMutedBrush);
+        key.Width = 22;
+
+        var name = Ui.Text(speaker?.Name ?? "Unknown", 14);
+        name.Width = 130;
+        name.Margin = new Thickness(0, 0, 12, 0);
+
+        var range = Ui.Mono(Ui.Tenths(open.StartSeconds) + " → still open", 13);
+        range.Width = 210;
+        range.Margin = new Thickness(0, 0, 12, 0);
+
+        var elapsed = Ui.Mono("◉ 0.0 s", 12.5, new SolidColorBrush(colour));
+        elapsed.Width = 74;
+        _liveRows.Add((open, elapsed));
+
+        var trailing = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        trailing.Children.Add(ReassignPicker(open.SpeakerSlot, slot => _engine.ReassignOpen(open.SpeakerSlot, slot)));
+
+        var row = Ui.Columns(5, bar, key, name, range, elapsed, Ui.Filler(), trailing);
+
+        return new Border
+        {
+            Background = Palette.TintBrush(colour, 0.12),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 6, 12, 6),
+            Margin = new Thickness(0, 0, 0, 4),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(colour),
+            Child = row,
+        };
     }
 
-    private Dropdown ReassignDropdown(Mark mark)
+    private Dropdown ReassignDropdown(Mark mark) =>
+        ReassignPicker(mark.SpeakerSlot, slot => _engine.Reassign(mark.Id, slot));
+
+    /// <summary>
+    /// Inline speaker picker — section 06 requires reassign to be inline and
+    /// never a modal. The speaker it is currently assigned to is marked in
+    /// the list rather than removed from it, so the roster keeps the same
+    /// order and the same position every time it is opened.
+    /// </summary>
+    private Dropdown ReassignPicker(int currentSlot, Action<int> assign)
     {
         var dropdown = new Dropdown("ChipButton")
         {
@@ -414,10 +484,11 @@ public sealed class MarksDock : Border
             Margin = new Thickness(0, 0, 6, 0),
             PopupMinWidth = 180,
         };
-        dropdown.SetItems(_session.Speakers.Select(s => (s.KeyLabel + "  " + s.Name, (object)s.SlotIndex)));
+        dropdown.SetItems(_session.Speakers.Select(s =>
+            ((s.SlotIndex == currentSlot ? "● " : "   ") + s.KeyLabel + "  " + s.Name, (object)s.SlotIndex)));
         dropdown.SelectionChanged += value =>
         {
-            if (value is int slot) _engine.Reassign(mark.Id, slot);
+            if (value is int slot && slot != currentSlot) assign(slot);
             dropdown.DisplayText = "reassign";
         };
         return dropdown;
