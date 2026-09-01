@@ -176,7 +176,12 @@ public sealed class RecordingWindow : ShellWindow
         {
             Text = "00:00:00",
             FontFamily = Ui.MonoFont,
-            FontSize = 38,
+            // 26, not the 38 it was. The clock was the tallest thing in the
+            // header by a wide margin — 50 of its 78 pixels — so the strip
+            // could not lose height without it. At 26 the header is set by
+            // its 36px buttons instead, which is the right floor: Stop and
+            // Pause are pressed mid-meeting and have to stay easy targets.
+            FontSize = 26,
             Foreground = Palette.TextBrush,
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -307,7 +312,7 @@ public sealed class RecordingWindow : ShellWindow
         clockGroup.Children.Add(_clock);
 
         var header = Ui.Columns(2, clockGroup, stats, Ui.Filler(), undo, _pauseButton, stop);
-        header.Margin = new Thickness(20, 16, 20, 12);
+        header.Margin = new Thickness(20, 10, 20, 8);
 
         var headerRule = new Border
         {
@@ -319,13 +324,13 @@ public sealed class RecordingWindow : ShellWindow
             Fixed(Ui.Section("Minimap"), 64),
             Ui.Well(_minimap, new Thickness(0), 6),
             PadLeft(_minimapClock, 10));
-        minimapRow.Margin = new Thickness(20, 6, 20, 0);
+        minimapRow.Margin = new Thickness(20, 4, 20, 0);
         if (minimapRow.Children[1] is FrameworkElement lane) lane.Height = MinimapHeight;
 
         var addSpeaker = Ui.MakeButton("＋ Add speaker", "Ctrl+N", "LinkButton", (_, _) => ShowAddStrip());
 
         var speakersHeader = Ui.Columns(2, PadRight(_speakersHeading, 12), _rosterHint, Ui.Filler(), addSpeaker);
-        speakersHeader.Margin = new Thickness(20, 10, 20, 0);
+        speakersHeader.Margin = new Thickness(20, 8, 20, 0);
 
         // The grid is what the default window height has to fit without a
         // scrollbar, so its own chrome gives up what it can spare first.
@@ -376,7 +381,7 @@ public sealed class RecordingWindow : ShellWindow
             Fixed(Ui.Section("Transcript"), 64),
             _transcriptView!,
             PadLeft(_transcriptStatus!, 10));
-        row.Margin = new Thickness(20, 8, 20, 0);
+        row.Margin = new Thickness(20, 6, 20, 0);
         return row;
     }
 
@@ -401,7 +406,7 @@ public sealed class RecordingWindow : ShellWindow
     private static TextBlock StatValue(string text) => new()
     {
         Text = text,
-        FontSize = 17,
+        FontSize = 15,
         FontFamily = Ui.UiFont,
         Foreground = Palette.TextBrush,
         TextTrimming = TextTrimming.CharacterEllipsis,
@@ -464,7 +469,7 @@ public sealed class RecordingWindow : ShellWindow
 
         foreach (var speaker in _session.Speakers)
         {
-            var tile = new SpeakerTile(speaker, density, _compactLayout) { Margin = new Thickness(5) };
+            var tile = new SpeakerTile(speaker, density, _compactLayout) { Margin = new Thickness(4) };
             tile.Tapped += slot => ToggleSpeaker(slot, viaHotkey: false);
             tile.EditRequested += ShowRenameCard;
             tile.DeleteRequested += ShowRemoveCard;
@@ -472,26 +477,11 @@ public sealed class RecordingWindow : ShellWindow
             _tiles[speaker.SlotIndex] = tile;
         }
 
-        if (count < 12)
-        {
-            var add = new Border
-            {
-                Height = SpeakerTile.HeightFor(density, _compactLayout),
-                CornerRadius = new CornerRadius(8),
-                BorderBrush = Palette.AccentEdgeBrush,
-                BorderThickness = new Thickness(1),
-                Margin = new Thickness(5),
-                Cursor = Cursors.Hand,
-                Child = Ui.Text("＋ Add", 14, Palette.AccentTextBrush),
-            };
-            if (add.Child is FrameworkElement label)
-            {
-                label.HorizontalAlignment = HorizontalAlignment.Center;
-                label.VerticalAlignment = VerticalAlignment.Center;
-            }
-            add.MouseLeftButtonUp += (_, _) => ShowAddStrip();
-            _tileGrid.Children.Add(add);
-        }
+        // There is deliberately no "＋ Add" cell in the grid. It occupied a
+        // whole tile slot, which pushed 4, 6 and 9 speakers onto an extra row
+        // — the difference between the grid fitting the default window and
+        // scrolling. The header's "＋ Add speaker" and Ctrl+N are the same
+        // action and cost no height at all.
 
         _speakersHeading.Text = ("Speakers · " + count + " of 12").ToUpperInvariant();
         _rosterHint.Text = count >= 12
