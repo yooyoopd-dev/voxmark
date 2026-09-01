@@ -397,19 +397,25 @@ public sealed class SpeakerTile : Border
 
     /// <summary>
     /// Tile height for a density band. <paramref name="compact"/> is the
-    /// recording screen giving up roughly a line of tile height to the live
-    /// transcript strip — the grid stays the same shape, the tiles just lose
-    /// slack. Section 02's 72px floor is never crossed, so even the densest
-    /// compact tile is still a comfortable target in a dim room.
+    /// recording screen giving up a little more to the live transcript strip
+    /// — the grid stays the same shape, the tiles just lose slack.
+    ///
+    /// These are about 30% shorter than they were, so the whole grid fits the
+    /// default window height without a scrollbar: an operator hunting for a
+    /// tile that has scrolled out of sight is an operator not marking. Section
+    /// 02's <b>72px floor is never crossed</b>, which is what stops the
+    /// shrinking from reaching the point where a tile is no longer a
+    /// comfortable target in a dim room — the two densest bands sit on it
+    /// already, and the roomier ones keep the proportions between them.
     /// </summary>
     public static double HeightFor(TileDensity density, bool compact = false)
     {
         var height = density switch
         {
-            TileDensity.Roomy => 148.0,
-            TileDensity.Default => 116.0,
-            TileDensity.Tight => 96.0,
-            _ => 76.0,
+            TileDensity.Roomy => 104.0,
+            TileDensity.Default => 84.0,
+            TileDensity.Tight => 74.0,
+            _ => 72.0,
         };
 
         return compact ? Math.Max(72, height - CompactReductionFor(density)) : height;
@@ -421,18 +427,22 @@ public sealed class SpeakerTile : Border
     /// </summary>
     private static double CompactReductionFor(TileDensity density) => density switch
     {
-        TileDensity.Roomy => 16,
-        TileDensity.Default => 12,
-        TileDensity.Tight => 8,
-        _ => 4,
+        TileDensity.Roomy => 12,
+        TileDensity.Default => 8,
+        TileDensity.Tight => 2,
+        _ => 0,
     };
 
+    /// <summary>
+    /// The name size follows the tile down. A 24pt name in a 104px tile
+    /// leaves no room for the key, the star and the mark time underneath it.
+    /// </summary>
     private static double NameSizeFor(TileDensity density) => density switch
     {
-        TileDensity.Roomy => 24,
-        TileDensity.Default => 19,
-        TileDensity.Tight => 17,
-        _ => 16,
+        TileDensity.Roomy => 21,
+        TileDensity.Default => 18,
+        TileDensity.Tight => 16,
+        _ => 15,
     };
 
     private static FontFamily Ui { get; } = new("Segoe UI Variable Text, Segoe UI");

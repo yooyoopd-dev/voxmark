@@ -31,11 +31,32 @@ public sealed class TranscriptStore : IDisposable
 
     public void Append(TranscriptSegment segment)
     {
-        var line = "{\"start\":" + Number(segment.StartSeconds) +
-                   ",\"end\":" + Number(segment.EndSeconds) +
-                   ",\"p\":" + Number(segment.Probability) +
-                   ",\"text\":" + JsonSerializer.Serialize(segment.Text) + "}";
+        Write("{\"start\":" + Number(segment.StartSeconds) +
+              ",\"end\":" + Number(segment.EndSeconds) +
+              ",\"p\":" + Number(segment.Probability) +
+              ",\"text\":" + JsonSerializer.Serialize(segment.Text) + "}");
+    }
 
+    /// <summary>
+    /// Record that the operator corrected a line's words.
+    ///
+    /// Appended rather than rewritten: the file is opened for append and
+    /// fsync'd per line precisely so a crash cannot cost what came before,
+    /// and seeking back into it to patch a line would give that up. Replay
+    /// applies the edits over the originals, so the last word wins and the
+    /// recogniser's first guess stays on the record.
+    ///
+    /// Segments are identified by their start time, which is unique because
+    /// they are produced in order and never overlap.
+    /// </summary>
+    public void AppendEdit(TranscriptSegment segment)
+    {
+        Write("{\"op\":\"edit\",\"start\":" + Number(segment.StartSeconds) +
+              ",\"text\":" + JsonSerializer.Serialize(segment.Text) + "}");
+    }
+
+    private void Write(string line)
+    {
         var bytes = Encoding.UTF8.GetBytes(line + "\n");
         lock (_lock)
         {
@@ -69,12 +90,24 @@ public sealed class TranscriptStore : IDisposable
                 {
                     using var doc = JsonDocument.Parse(line);
                     var root = doc.RootElement;
+                    var start = root.GetProperty("start").GetDouble();
+                    var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+
+                    // An operator correction, replayed over the line it
+                    // corrects. Applied in file order, so the newest wins.
+                    if (root.TryGetProperty("op", out var op) && op.GetString() == "edit")
+                    {
+                        var target = segments.FirstOrDefault(s => Math.Abs(s.StartSeconds - start) < 0.005);
+                        if (target is not null) target.Text = text;
+                        continue;
+                    }
+
                     segments.Add(new TranscriptSegment
                     {
-                        StartSeconds = root.GetProperty("start").GetDouble(),
+                        StartSeconds = start,
                         EndSeconds = root.GetProperty("end").GetDouble(),
                         Probability = root.TryGetProperty("p", out var p) ? p.GetDouble() : 0,
-                        Text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "",
+                        Text = text,
                     });
                 }
                 catch (Exception)

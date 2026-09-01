@@ -39,9 +39,15 @@ public sealed class RecordingWindow : ShellWindow
     /// tall — so the tile grid's own scroller is what absorbs the extra
     /// height rather than the timecode or the dock.
     /// </summary>
-    private const double TallWaveHeight = 198;
-    private const double CompactWaveHeight = 162;
-    private const double ExpandedWaveHeight = 108;
+    // Waveform 10% shorter than it was, and the minimap half its old height:
+    // both were sized before the transcript strip grew to five lines, and the
+    // speaker grid is what has to stop scrolling at the default window size.
+    private const double TallWaveHeight = 178;
+    private const double CompactWaveHeight = 146;
+    private const double ExpandedWaveHeight = 97;
+
+    /// <summary>The minimap lane. Half its former 38px — it is a locator, not a display.</summary>
+    private const double MinimapHeight = 19;
     private const double CollapsedDockHeight = 232;
     private const double CompactCollapsedDockHeight = 150;
     private const double ExpandedDockHeight = 380;
@@ -223,6 +229,7 @@ public sealed class RecordingWindow : ShellWindow
         {
             _transcription = new TranscriptionService(session.Options);
             _transcriptView = new TranscriptView();
+            _transcriptView.TextEdited += OnTranscriptEdited;
             _transcriptStatus = Ui.Text("starting…", 11, Palette.TextMutedBrush);
             // Anything long enough to need more room than this belongs in the
             // notice banner, which is where the real failures already go.
@@ -312,15 +319,17 @@ public sealed class RecordingWindow : ShellWindow
             Fixed(Ui.Section("Minimap"), 64),
             Ui.Well(_minimap, new Thickness(0), 6),
             PadLeft(_minimapClock, 10));
-        minimapRow.Margin = new Thickness(20, 8, 20, 0);
-        if (minimapRow.Children[1] is FrameworkElement lane) lane.Height = 38;
+        minimapRow.Margin = new Thickness(20, 6, 20, 0);
+        if (minimapRow.Children[1] is FrameworkElement lane) lane.Height = MinimapHeight;
 
         var addSpeaker = Ui.MakeButton("＋ Add speaker", "Ctrl+N", "LinkButton", (_, _) => ShowAddStrip());
 
         var speakersHeader = Ui.Columns(2, PadRight(_speakersHeading, 12), _rosterHint, Ui.Filler(), addSpeaker);
-        speakersHeader.Margin = new Thickness(20, 16, 20, 0);
+        speakersHeader.Margin = new Thickness(20, 10, 20, 0);
 
-        _tileGrid.Margin = new Thickness(20, 10, 20, 10);
+        // The grid is what the default window height has to fit without a
+        // scrollbar, so its own chrome gives up what it can spare first.
+        _tileGrid.Margin = new Thickness(20, 6, 20, 6);
 
         var gridScroller = new ScrollViewer
         {
@@ -606,6 +615,24 @@ public sealed class RecordingWindow : ShellWindow
         _recognised.Enqueue(segment);
     }
 
+    /// <summary>
+    /// The operator corrected a recognised line. The segment object is the
+    /// one the session holds, so the words are already right everywhere they
+    /// are read from — the export included. All that is left is telling the
+    /// journal, so a crash cannot undo the correction.
+    /// </summary>
+    private void OnTranscriptEdited(TranscriptSegment segment)
+    {
+        try
+        {
+            _transcriptStore?.AppendEdit(segment);
+        }
+        catch (Exception ex)
+        {
+            AppPaths.Note("Could not journal a transcript correction: " + ex.Message);
+        }
+    }
+
     private void OnTranscriptionStatus(string status)
     {
         Dispatcher.InvokeAsync(() =>
@@ -692,6 +719,11 @@ public sealed class RecordingWindow : ShellWindow
         _minimap.ViewportStart = Math.Max(0, elapsed - _waveform.WindowSeconds);
         _minimap.ViewportEnd = elapsed;
         _minimap.SetMarks(_marking.Chronological());
+
+        // The turn in progress, drawn as a block that grows with the meeting.
+        // Without it the minimap shows every speaker except the one talking
+        // right now, which is the one the operator is checking.
+        _minimap.SetLive(OpenMarksAsBlocks(elapsed));
         _minimapClock.Text = Ui.Clock(elapsed) + " / whole session";
         _dock.UpdateLive(elapsed);
 
@@ -761,10 +793,22 @@ public sealed class RecordingWindow : ShellWindow
 
         var now = _capture.ElapsedSeconds;
         var marks = _marking.Marks.ToList();
+        marks.AddRange(OpenMarksAsBlocks(now));
+        return marks;
+    }
+
+    /// <summary>
+    /// The open marks as drawable blocks, ending at <paramref name="now"/>.
+    /// Throwaway stand-ins with negative ids, so they can never be confused
+    /// with a journalled mark, and rebuilt on every call rather than stored.
+    /// </summary>
+    private List<Mark> OpenMarksAsBlocks(double now)
+    {
+        var blocks = new List<Mark>();
         var id = 0L;
         foreach (var open in _marking.Open)
         {
-            marks.Add(new Mark
+            blocks.Add(new Mark
             {
                 Id = --id,
                 SpeakerSlot = open.SpeakerSlot,
@@ -772,8 +816,7 @@ public sealed class RecordingWindow : ShellWindow
                 EndSeconds = Math.Max(open.StartSeconds, now),
             });
         }
-
-        return marks;
+        return blocks;
     }
 
     /// <summary>
@@ -1010,6 +1053,13 @@ public sealed class RecordingWindow : ShellWindow
             }
             return;
         }
+
+#if !VOXMARK_LITE
+        // Same rule while a transcript line is being corrected: the digits
+        // are part of what is being typed, and the field handles its own
+        // Enter and Esc. Alt+n still marks — those never come through here.
+        if (_transcriptView?.IsEditing == true) return;
+#endif
 
         if (_addStrip.Visibility == Visibility.Visible)
         {
@@ -1416,6 +1466,11 @@ public sealed class RecordingWindow : ShellWindow
         _stopping = true;
 
         CloseCardPopup();
+#if !VOXMARK_LITE
+        // A correction still open in the strip has to land before the export
+        // reads the segment it is editing.
+        _transcriptView?.CommitEdit();
+#endif
         _timer.Stop();
         _capture.SlicesAvailable -= OnSlices;
         _capture.DeviceChanged -= OnDeviceChanged;

@@ -97,10 +97,19 @@ line underneath tells you which model it found and whether it is running on
 `CUDA` or `CPU`. If something is missing it says what, and recording still
 goes ahead without a transcript — transcription can never stop a recording.
 
-While recording, a three-line strip under the minimap shows the words as they
+While recording, a five-line strip under the minimap shows the words as they
 are recognised, a few seconds behind the room, with each line's timecode in
 the colour of whoever was marked at that moment. Scroll it back to re-read;
 it stops following the live edge until you scroll to the bottom again.
+
+**Click a line to correct it.** Whisper is good but not right, and a name or a
+piece of jargon it mangles is obvious to you in the room and unrecoverable to
+whoever reads the file later. Enter commits, Esc abandons, and the correction
+goes into the exported Markdown as well as the on-disk journal.
+
+The minimap under the waveform shows the turn in progress as a growing
+coloured block, so the speaker being marked right now is visible there and not
+only on the tile.
 
 The strip appearing a few seconds behind is the decoder working, not a
 mistiming: each line carries the timecode of the audio it came from, which is

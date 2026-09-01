@@ -24,6 +24,7 @@ public sealed class BlockLaneView : FrameworkElement
     private static readonly Brush ViewportFill = FrozenBrush(Color.FromArgb(0x10, 0xE9, 0xE9, 0xED));
 
     private IReadOnlyList<Mark> _marks = Array.Empty<Mark>();
+    private IReadOnlyList<Mark> _live = Array.Empty<Mark>();
 
     public double TotalSeconds { get; set; } = 1;
 
@@ -59,6 +60,23 @@ public sealed class BlockLaneView : FrameworkElement
     public void SetMarks(IReadOnlyList<Mark> marks)
     {
         _marks = marks;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// The turns that are open right now, drawn as blocks that grow with the
+    /// recording.
+    ///
+    /// Separate from <see cref="SetMarks"/> because they are not marks yet —
+    /// they have no id, no end, and no journal entry — and because they are
+    /// drawn differently: full-strength colour and a bright leading edge,
+    /// where a closed mark is tinted back. Without them the minimap shows
+    /// every speaker except the one talking, which is the one the operator is
+    /// looking for.
+    /// </summary>
+    public void SetLive(IReadOnlyList<Mark> live)
+    {
+        _live = live;
         InvalidateVisual();
     }
 
@@ -115,6 +133,21 @@ public sealed class BlockLaneView : FrameworkElement
             {
                 dc.DrawRoundedRectangle(null, SelectionPen, Inflate(rect, 1), 3, 3);
             }
+        }
+
+        foreach (var mark in _live)
+        {
+            var left = mark.StartSeconds / total * width;
+            var right = mark.EndSeconds / total * width;
+            var blockWidth = Math.Max(2, right - left);
+            var rect = new Rect(left, BlockInset, blockWidth, Math.Max(2, laneHeight - (rowCount > 1 ? 2 : 0)));
+
+            // Undimmed, unlike a closed mark, and capped with a bright edge at
+            // the growing end: this block is still being written.
+            var colour = Palette.ForSlot(mark.SpeakerSlot);
+            dc.DrawRoundedRectangle(FrozenBrush(colour), null, rect, 3, 3);
+            dc.DrawRectangle(Palette.TextBrush, null,
+                new Rect(rect.Right - 1.5, rect.Y, 1.5, rect.Height));
         }
 
         if (ViewportStart is { } start && ViewportEnd is { } end && end > start)

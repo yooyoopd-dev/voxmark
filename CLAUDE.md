@@ -113,14 +113,22 @@ Implemented, with the guide section each answers to:
 - **02 tokens** — the colour ramp, the 12-slot speaker palette, monospaced
   tabular timecodes, 4px spacing scale, 72×160 minimum tile.
 - **04 recording** — live 45 s waveform with chapter-marker flags at every
-  speaker change, whole-session minimap with the live viewport, the
+  speaker change, whole-session minimap with the live viewport **and the turn
+  in progress drawn as a growing block** (`BlockLaneView.SetLive` — undimmed
+  and capped with a bright edge, because a minimap showing every speaker
+  except the one talking is missing the one the operator is checking), the
   Marks / Speaking now / Input / Written to disk header, dropped-buffer
   count surfaced rather than swallowed. The waveform is auto-gained against
   the loudest thing in the visible window and contrast-shaped, with the gain
   named in its own label — a room mic sits far below full scale, and a
   linear trace uses a tenth of the lane however tall the lane is.
 - **05 grid** — column count and tile height derived from speaker count
-  alone (2→4 / 5–6 / 7–9 / 10–12), roster order fixed for the session.
+  alone (2→4 / 5–6 / 7–9 / 10–12), roster order fixed for the session. Tiles
+  are sized so the whole grid fits the default window height without a
+  scrollbar — an operator hunting for a tile that scrolled out of sight is an
+  operator not marking — and section 02's **72px floor is what stops that
+  shrinking**; the two densest bands sit on it already, so any further saving
+  has to come from the waveform, the minimap or the dock instead.
   Each tile carries ✎ rename and ✕ remove in its top-right corner, opening
   a popup over that tile; both swallow their own click so neither ever
   marks. Removal is refused for a speaker who already has marks — their
@@ -162,8 +170,16 @@ Implemented, with the guide section each answers to:
   See "Losing the input device" below for what that fallback actually has to
   survive.
 - **Speech recognition (Full edition)** — beyond the guide: an opt-in
-  on-device whisper pass, a three-line live transcript strip under the
+  on-device whisper pass, a five-line live transcript strip under the
   minimap, and a `## Transcript` section mapping the words onto the marks.
+  Clicking a line in the strip opens it for editing: whisper is good but not
+  right, and a name or a piece of jargon it mangles is obvious to the person
+  in the room and unrecoverable to everyone downstream. The correction goes
+  into the segment the session already holds — so the export is right with no
+  further wiring — plus an `{"op":"edit"}` line appended to
+  `transcript.jsonl`, which `Replay` applies over the original. Appended, not
+  patched: the file is opened for append and fsync'd per line precisely so a
+  crash cannot cost what came before.
   See "Speech recognition" and "Editions" below.
 
 **Deliberately deferred — confirm scope with the user before building:**
@@ -454,12 +470,33 @@ or not: the standing brief for the LLM the file is handed to, asking for a
 `transcript.md` holding the verbatim per-speaker transcript, an executive
 summary, per-speaker key points, and the same summary and key points again
 in Korean. It exists so the operator does not retype that prompt after every
-meeting. Like the transcript it is **additive** — last in the file, after
-the Notes, with only a one-line pointer under the title so it is not missed
-— and it is written in English whatever language the meeting was in, because
-it addresses the agent rather than the room. Changing what it asks for
-changes what every downstream agent produces, so treat its wording as
+meeting. It is written in English whatever language the meeting was in,
+because it addresses the agent rather than the room. Changing what it asks
+for changes what every downstream agent produces, so treat its wording as
 interface, not prose.
+
+It goes **first**, immediately after the `# Title` and before the data it is
+about; the section 10 tables follow it under a new `## Speaker segments`
+heading. It used to sit last with a one-line pointer under the title, which
+kept the contract at the top of the file — but a pointer only works on a
+reader that follows it, and an agent handed this document acts on what it
+reads first. Front matter, field order, the tables themselves and the
+separate `## Gaps` section are all unchanged; only their position in the
+document moved, and they gained a heading of their own so the table is not
+left floating under someone else's prose.
+
+`AppendRecognitionCautions` is written into both routes, since Route B skips
+the alignment step where the first of the two would otherwise be caught.
+Both are reports from the operator about this material rather than general
+caveats about whisper, which is why they read as facts and not as hedging:
+English recognition here occasionally returns a word with **no relation to
+the sentence around it**, and these meetings are dense with **industry
+abbreviations** that mostly have several possible expansions. The
+abbreviation rule is a *suppression* rule, not a "be careful" — an expansion
+that fits the letters but not the discussion reads as confident and specific,
+which is exactly what makes it dangerous in a summary someone acts on, so an
+unresolvable abbreviation stays in the verbatim transcript and is kept out of
+the summary and key points entirely.
 
 The brief **branches at read time, not at export time**, because the export
 cannot know what the agent will be handed — the MP3 does not always travel
