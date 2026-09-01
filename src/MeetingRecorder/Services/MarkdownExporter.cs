@@ -200,10 +200,17 @@ public static class MarkdownExporter
         if (whole) sb.Append(" — complete session");
         sb.Append("\n\n");
 
+        // The brief comes first, before the data it is about. It used to sit
+        // last with a pointer under the title, on the reasoning that the
+        // section 10 contract should open the file — but a pointer is only as
+        // good as the reader that follows it, and an agent handed this file
+        // acts on what it reads first. The contract is unchanged, only later
+        // in the document.
+        AppendAgentInstructions(sb, part, partCount, segments.Count > 0, whole);
+
+        sb.Append("## Speaker segments\n\n");
         sb.Append("Speaker segments in chronological order. Each row is one continuous\n");
         sb.Append("turn marked by the operator during the meeting.\n");
-        sb.Append("\nIf you are an AI agent, read \"## Agent Instructions\" at the end of this\n");
-        sb.Append("file first — it is the task this file exists for.\n");
         if (split)
         {
             sb.Append("\nTimes are offsets from the start of part 1, not from the start of\n");
@@ -337,8 +344,6 @@ public static class MarkdownExporter
             sb.Append("- ").Append(note).Append('\n');
         }
 
-        AppendAgentInstructions(sb, part, partCount, segments.Count > 0, whole);
-
         return sb.ToString();
     }
 
@@ -355,10 +360,12 @@ public static class MarkdownExporter
     /// "## Transcript" section present means write the report straight from
     /// that section; neither means say so instead of inventing a meeting.
     ///
-    /// It goes last, after the Notes, for the same reason the transcript goes
-    /// after the Gaps table: the section 10 contract above it is untouched,
-    /// and a reader that only knows that contract loses nothing. The pointer
-    /// under the title is what keeps it from being missed down here.
+    /// It goes <b>first</b>, straight after the title. It used to sit last
+    /// with a one-line pointer under the title, which kept the section 10
+    /// contract at the top of the file — but a pointer only works on a reader
+    /// that follows it, and an agent handed this document acts on what it
+    /// reads first. The contract itself is unchanged; it simply starts a few
+    /// dozen lines further down, under its own "## Speaker segments" heading.
     ///
     /// Written in English regardless of the meeting's own language — it
     /// addresses the agent, not the room — while the report it asks for is
@@ -369,10 +376,12 @@ public static class MarkdownExporter
     {
         var split = partCount > 1 && !whole;
 
-        sb.Append("\n## Agent Instructions\n\n");
-        sb.Append("You are an AI agent. This file records **who held the floor and when**.\n");
-        sb.Append("Your job is to pair that with **what was said** and write one new file,\n");
-        sb.Append("`transcript.md`, beside this one.\n\n");
+        sb.Append("## Agent Instructions\n\n");
+        sb.Append("You are an AI agent, and this section is the task this file exists for —\n");
+        sb.Append("read it before the data below it.\n\n");
+        sb.Append("This file records **who held the floor and when**. Your job is to pair that\n");
+        sb.Append("with **what was said** and write one new file, `transcript.md`, beside this\n");
+        sb.Append("one.\n\n");
 
         sb.Append("### Step 1 — pick your route\n\n");
         sb.Append("Check what you were actually given, then follow the matching route. Do not\n");
@@ -384,8 +393,8 @@ public static class MarkdownExporter
         sb.Append(split || whole
             ? "The session's " + partCount + " MP3 files are present.\n"
             : "The MP3 named in `audio_file` is present.\n");
-        sb.Append("Transcribe the audio yourself and align it to the speaker rows above, per\n");
-        sb.Append("Step 2.\n");
+        sb.Append("Transcribe the audio yourself and align it to the speaker rows in\n");
+        sb.Append("\"## Speaker segments\" below, per Step 2.\n");
         if (hasTranscript)
         {
             sb.Append("The `## Transcript` section below is machine recognition with no human\n");
@@ -407,12 +416,14 @@ public static class MarkdownExporter
             sb.Append("rather than \"improving\" it, and say once at the top of `transcript.md`\n");
             sb.Append("that it was built from the embedded recognition rather than the\n");
             sb.Append("recording. If that text is not in English, translate it.\n\n");
+
+            AppendRecognitionCautions(sb);
         }
         else
         {
             sb.Append("**Route B — you do not have the audio.** This file has no `## Transcript`\n");
             sb.Append("section either, so nothing here records what was said: the speaker table\n");
-            sb.Append("above is timings only. Say that plainly and stop. Do not write a\n");
+            sb.Append("below is timings only. Say that plainly and stop. Do not write a\n");
             sb.Append("`transcript.md` from the speaker names and timings alone — a transcript\n");
             sb.Append("of a meeting you cannot hear would be invention, not a transcript.\n\n");
         }
@@ -420,7 +431,7 @@ public static class MarkdownExporter
         sb.Append("### Step 2 — align the speech to the speakers (Route A only)\n\n");
         sb.Append("1. Transcribe the audio in **English**. If the meeting was held in another\n");
         sb.Append("   language, translate it into English and say which language it was.\n");
-        sb.Append("2. Align what you hear to the speaker rows above **by time**. A row's\n");
+        sb.Append("2. Align what you hear to the speaker rows below **by time**. A row's\n");
         sb.Append("   `start` and `end` bound that speaker's turn, so speech inside that range\n");
         sb.Append("   is theirs. Do not invent speaker changes the table does not show.\n");
         sb.Append("3. Give a passage that straddles two rows to the row it overlaps most.\n");
@@ -428,6 +439,8 @@ public static class MarkdownExporter
         sb.Append("   table — it is a person's live record, and it is the point of this file.\n");
         sb.Append("4. Speech inside a `## Gaps` range has no marked speaker. File it under\n");
         sb.Append("   \"Unmarked\" rather than guessing who was talking.\n\n");
+
+        AppendRecognitionCautions(sb);
 
         sb.Append("### Step 3 — write `transcript.md`\n\n");
         // The split rule belongs to both routes, not to Route A's alignment
@@ -470,7 +483,47 @@ public static class MarkdownExporter
 
         sb.Append("Ground every statement in your source. Where it is unclear, write\n");
         sb.Append("`[inaudible HH:MM:SS.mmm]` instead of guessing, and never add a decision,\n");
-        sb.Append("number, owner or deadline that nobody said.\n");
+        sb.Append("number, owner or deadline that nobody said.\n\n");
+    }
+
+    /// <summary>
+    /// What machine recognition gets wrong in this room, and what to do about
+    /// it. Written into both routes, because Route B skips the alignment step
+    /// where the first of these would otherwise be caught.
+    ///
+    /// Both are reports from the operator rather than general caveats about
+    /// whisper, which is why they are stated as facts about this recording
+    /// and not as hedging. The abbreviation rule in particular is a
+    /// suppression rule, not a "be careful" — an expansion that fits the
+    /// letters but not the discussion reads as confident and specific, which
+    /// is exactly what makes it dangerous in a summary someone acts on.
+    /// </summary>
+    private static void AppendRecognitionCautions(StringBuilder sb)
+    {
+        sb.Append("### What the recogniser gets wrong here\n\n");
+
+        sb.Append("**Occasional words are simply wrong, and not wrong in a plausible way.**\n");
+        sb.Append("English recognition on this material now and then returns a word with no\n");
+        sb.Append("relation to the sentence around it — not a near-miss, something from a\n");
+        sb.Append("different subject entirely. Treat a word that breaks the sense of its own\n");
+        sb.Append("sentence as a recognition error rather than as something a person said. In\n");
+        sb.Append("the verbatim transcript keep it and mark it `[?]`; do not build any summary\n");
+        sb.Append("point, decision or action item on it.\n\n");
+
+        sb.Append("**Industry abbreviations are frequent — expand only the ones the context\n");
+        sb.Append("supports.** These meetings use a lot of short forms, and most have several\n");
+        sb.Append("possible expansions. Expand an abbreviation only where the surrounding\n");
+        sb.Append("discussion makes one reading clearly right, and write it as\n");
+        sb.Append("`ABC (expansion)` the first time so the reader can check you.\n\n");
+
+        sb.Append("Where no expansion fits the context, **leave the abbreviation exactly as\n");
+        sb.Append("recognised and keep it out of the summary and the key points entirely.**\n");
+        sb.Append("It still belongs in the verbatim transcript — that is the record of what\n");
+        sb.Append("was said. But a guessed expansion reads as confident and specific, which\n");
+        sb.Append("is precisely what makes a wrong one dangerous in a document someone acts\n");
+        sb.Append("on. Silence about a term you could not place is the correct outcome, and\n");
+        sb.Append("a short list of the abbreviations you left unresolved is more useful than\n");
+        sb.Append("any guess at them.\n\n");
     }
 
     /// <summary>

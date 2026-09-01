@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using MeetingRecorder.Models;
 using MeetingRecorder.Theme;
 using MeetingRecorder.Views;
@@ -8,27 +10,33 @@ using MeetingRecorder.Views;
 namespace MeetingRecorder.Controls;
 
 /// <summary>
-/// The live transcript strip on the recording screen: three lines of
+/// The live transcript strip on the recording screen: five lines of
 /// recognised speech, with everything said earlier scrollable above them.
 ///
-/// Three lines is deliberate. The operator's job is marking, not reading — the
-/// strip is there to confirm that recognition is alive and roughly on time,
-/// and a taller one would compete with the speaker grid for both space and
-/// attention. History stays reachable for the moment someone asks "what did
-/// they just say", and the view stops following the newest line as soon as
-/// the operator scrolls back, so reading is never yanked out from under them.
+/// The operator's job is marking, not reading — the strip is there to confirm
+/// that recognition is alive and roughly on time, and a much taller one would
+/// compete with the speaker grid for both space and attention. History stays
+/// reachable for the moment someone asks "what did they just say", and the
+/// view stops following the newest line as soon as the operator scrolls back,
+/// so reading is never yanked out from under them.
 ///
 /// Each line's timecode is tinted with the colour of whoever was marked when
 /// it was spoken, which makes the mapping the Markdown will do visible while
 /// there is still time to correct it.
+///
+/// Clicking a line's text opens it for editing. Whisper is good but not
+/// right, and a name or a piece of jargon it mangles is obvious to the person
+/// in the room and unrecoverable to everyone downstream — the audio is
+/// re-transcribable, the operator's memory of what was actually said is not.
+/// Enter or clicking away commits, Esc abandons.
 ///
 /// No whisper dependency — this is a plain WPF control, so it compiles in the
 /// Lite edition too even though nothing there ever shows it.
 /// </summary>
 public sealed class TranscriptView : Border
 {
-    /// <summary>Enough to show three lines; the rest scrolls.</summary>
-    public const double StripHeight = 74;
+    /// <summary>Enough to show five lines; the rest scrolls.</summary>
+    public const double StripHeight = 116;
 
     /// <summary>
     /// Long meetings produce a lot of lines, and every one is a live WPF
@@ -52,9 +60,35 @@ public sealed class TranscriptView : Border
     /// was resolved against is later edited — reassigned, nudged, merged,
     /// undone — in the Marks dock.
     /// </summary>
-    private readonly List<(TranscriptSegment Segment, TextBlock TimeLabel)> _rows = new();
+    private readonly List<Row> _rows = new();
 
     private bool _following = true;
+
+    /// <summary>The row being edited, if any. Guards trimming and following.</summary>
+    private Row? _editing;
+
+    /// <summary>
+    /// True while a line is open for editing. The recording screen checks it
+    /// before treating a digit as a speaker key — the same rule the tile
+    /// rename card follows.
+    /// </summary>
+    public bool IsEditing => _editing is not null;
+
+    /// <summary>
+    /// Raised when the operator finished editing a line and the text really
+    /// changed. The segment has already been updated in place; the handler's
+    /// job is to persist it.
+    /// </summary>
+    public event Action<TranscriptSegment>? TextEdited;
+
+    /// <summary>One drawn line: the segment behind it and the elements showing it.</summary>
+    private sealed class Row
+    {
+        public required TranscriptSegment Segment { get; init; }
+        public required TextBlock TimeLabel { get; init; }
+        public required TextBlock TextLabel { get; init; }
+        public required Grid Container { get; init; }
+    }
 
     public TranscriptView()
     {
@@ -130,19 +164,28 @@ public sealed class TranscriptView : Border
         time.Margin = new Thickness(0, 2, 8, 0);
 
         var text = Ui.Wrap(segment.Text, 13, Palette.TextSecondaryBrush);
+        text.Cursor = Cursors.IBeam;
+        text.ToolTip = "Click to correct this line";
 
         var row = Ui.Columns(1, time, text);
         row.Margin = new Thickness(0, 0, 0, 3);
-        _lines.Children.Add(row);
-        _rows.Add((segment, time));
 
-        while (_lines.Children.Count > MaxLines)
+        var entry = new Row { Segment = segment, TimeLabel = time, TextLabel = text, Container = row };
+        text.MouseLeftButtonUp += (_, e) => { e.Handled = true; BeginEdit(entry); };
+
+        _lines.Children.Add(row);
+        _rows.Add(entry);
+
+        // Never retire the line being corrected out from under the operator.
+        while (_lines.Children.Count > MaxLines && !ReferenceEquals(_rows[0], _editing))
         {
             _lines.Children.RemoveAt(0);
             _rows.RemoveAt(0);
         }
 
-        if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
+        // Never scroll out from under a correction in progress — the line
+        // being typed into has to stay where the operator put the cursor.
+        if (_following && _editing is null) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
     }
 
     /// <summary>
@@ -155,12 +198,110 @@ public sealed class TranscriptView : Border
     /// </summary>
     public void RecolorAll(Func<TranscriptSegment, Color?> resolve)
     {
-        foreach (var (segment, label) in _rows)
+        foreach (var row in _rows)
         {
-            label.Foreground = resolve(segment) is { } colour
+            row.TimeLabel.Foreground = resolve(row.Segment) is { } colour
                 ? new SolidColorBrush(colour)
                 : Palette.TextFaintBrush;
         }
+    }
+
+    /// <summary>
+    /// Swap one line's text for an editable field, in place. The row keeps
+    /// its position, its timecode and its colour, so the correction happens
+    /// where the operator is already looking rather than in a dialog that
+    /// would cover the grid they are marking from.
+    /// </summary>
+    private void BeginEdit(Row row)
+    {
+        if (_editing is not null) CommitEdit();
+
+        var box = new TextBox
+        {
+            Text = row.Segment.Text,
+            FontSize = 13,
+            AcceptsReturn = false,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
+        var committed = false;
+        void Finish(bool keep)
+        {
+            if (committed) return;
+            committed = true;
+            EndEdit(row, keep ? box.Text : null);
+        }
+
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { e.Handled = true; Finish(true); }
+            else if (e.Key == Key.Escape) { e.Handled = true; Finish(false); }
+        };
+        box.LostKeyboardFocus += (_, _) => Finish(true);
+
+        row.Container.Children.Remove(row.TextLabel);
+        Grid.SetColumn(box, 1);
+        row.Container.Children.Add(box);
+
+        _editing = row;
+
+        // Focus has to wait for the box to be in the visual tree, or it lands
+        // nowhere and the first keystroke goes to the marking handler.
+        Dispatcher.InvokeAsync(() => { box.Focus(); box.SelectAll(); }, DispatcherPriority.Input);
+    }
+
+    /// <summary>Put the label back, carrying the new text when there is one.</summary>
+    private void EndEdit(Row row, string? text)
+    {
+        _editing = null;
+
+        for (var i = row.Container.Children.Count - 1; i >= 0; i--)
+        {
+            if (row.Container.Children[i] is TextBox) row.Container.Children.RemoveAt(i);
+        }
+
+        var changed = false;
+        if (text is not null)
+        {
+            var trimmed = text.Trim();
+            // An emptied line is a refusal to answer, not a correction: the
+            // recogniser heard something, and blanking the row would lose the
+            // fact that it did. Left as it was.
+            if (trimmed.Length > 0 && trimmed != row.Segment.Text)
+            {
+                row.Segment.Text = trimmed;
+                row.TextLabel.Text = trimmed;
+                changed = true;
+            }
+        }
+
+        if (!row.Container.Children.Contains(row.TextLabel))
+        {
+            Grid.SetColumn(row.TextLabel, 1);
+            row.Container.Children.Add(row.TextLabel);
+        }
+
+        if (changed) TextEdited?.Invoke(row.Segment);
+    }
+
+    /// <summary>
+    /// Commit whatever is open. Called when the strip loses the operator's
+    /// attention for something that must not wait — stopping the recording,
+    /// most of all, since the export reads the segment this is editing.
+    /// </summary>
+    public void CommitEdit()
+    {
+        if (_editing is null) return;
+
+        // Moving focus fires LostKeyboardFocus, which commits through the
+        // handler installed above rather than duplicating the logic here.
+        var row = _editing;
+        var box = row.Container.Children.OfType<TextBox>().FirstOrDefault();
+        if (box is not null && box.IsKeyboardFocusWithin) Keyboard.ClearFocus();
+
+        // Still open means the field never had focus to lose. Close it by
+        // hand, keeping what was typed rather than discarding it.
+        if (_editing is not null) EndEdit(row, box?.Text);
     }
 
     /// <summary>
@@ -180,6 +321,7 @@ public sealed class TranscriptView : Border
     /// <summary>Drop every line — used when a recovered session's text is re-seeded.</summary>
     public void Clear()
     {
+        _editing = null;
         _lines.Children.Clear();
         _rows.Clear();
         _scroller.Visibility = Visibility.Collapsed;
