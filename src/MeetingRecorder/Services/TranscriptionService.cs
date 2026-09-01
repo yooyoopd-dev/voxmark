@@ -16,12 +16,16 @@ namespace MeetingRecorder.Services;
 /// that cannot reach the encoder. If that worker dies, throws, or falls
 /// behind, the meeting still records and the operator is told in a sentence.
 ///
-/// Timestamps line up with the marks by construction. Audio is consumed
-/// strictly in order and nothing is discarded silently, so a chunk's start is
-/// exactly <c>framesConsumed / sourceSampleRate</c> — the same "count the
-/// samples that were written" rule <see cref="AudioCaptureService"/> uses for
-/// file time. That is what makes attributing a segment to a mark meaningful
-/// rather than approximate.
+/// Timestamps line up with the marks because the recorder's own file time is
+/// <b>carried with</b> every buffer rather than re-derived here. Each queued
+/// block remembers where it sits in the recording, so a chunk's start is that
+/// block's file time plus however far into it the chunk begins — the marks'
+/// clock and this one are then literally the same clock.
+///
+/// This used to be <c>framesConsumed / sourceSampleRate</c>, which measured
+/// the pipeline's own subscription rather than the recording: the tap is
+/// attached only after the whisper model has loaded, so every segment came
+/// out early by exactly that load time, for the whole meeting.
 /// </summary>
 public sealed class TranscriptionService : IDisposable
 {
@@ -39,6 +43,14 @@ public sealed class TranscriptionService : IDisposable
     private const double MaxChunkSeconds = 18.0;
 
     /// <summary>
+    /// The shortest chunk a marked handover is allowed to produce. Below this
+    /// the decode degrades enough to lose the words the cut was made to place
+    /// correctly, so a handover this close to the last one is left to fall
+    /// inside the chunk and be resolved by overlap as before.
+    /// </summary>
+    private const double MinBoundaryChunkSeconds = 2.5;
+
+    /// <summary>
     /// How far behind the transcriber may fall before it starts dropping
     /// audio. Two minutes at 44.1 kHz mono float is about 21 MB — cheap
     /// enough to absorb a slow patch, small enough that it cannot grow into
@@ -48,22 +60,51 @@ public sealed class TranscriptionService : IDisposable
 
     private readonly SessionOptions _options;
     private readonly object _lock = new();
-    private readonly Queue<float[]> _pending = new();
+
+    /// <summary>
+    /// Captured audio waiting to be recognised, each block tagged with the
+    /// file time of its first sample. The tag is what keeps this pipeline on
+    /// the recorder's clock instead of its own.
+    /// </summary>
+    private readonly Queue<PendingAudio> _pending = new();
+
     private readonly ManualResetEventSlim _work = new(false);
 
     private Thread? _worker;
     private WhisperFactory? _factory;
     private WhisperProcessor? _processor;
 
+    /// <summary>Resolved by <see cref="Prepare"/>, loaded by <see cref="Begin"/>.</summary>
+    private WhisperRuntime.ModelResult? _model;
+
     private int _sourceSampleRate = AudioCaptureService.SampleRate;
     private int _pendingSamples;
     private int _headOffset;
-    private long _consumedFrames;
+
+    /// <summary>
+    /// Speaker-change instants the operator has marked, in file time and in
+    /// order, not yet passed by the chunker. See <see cref="NoteSpeakerChange"/>.
+    /// </summary>
+    private readonly List<double> _boundaries = new();
+
+    /// <summary>
+    /// Where the audio consumed so far ends, in file time. Only consulted
+    /// when the queue is empty — with blocks in it, the head's own tag is the
+    /// better answer.
+    /// </summary>
+    private double _lastChunkEndSeconds;
 
     /// <summary>Where the chunk being decoded starts, so the segment callback can offset into it.</summary>
     private double _chunkStartSeconds;
     private volatile bool _stopping;
     private volatile bool _faulted;
+
+    /// <summary>
+    /// True between <see cref="Prepare"/> and <see cref="StopAndFlush"/>:
+    /// audio is welcome even before the worker exists, because the model load
+    /// sits between those two moments.
+    /// </summary>
+    private volatile bool _accepting;
 
     public TranscriptionService(SessionOptions options) => _options = options;
 
@@ -102,11 +143,18 @@ public sealed class TranscriptionService : IDisposable
     }
 
     /// <summary>
-    /// Load the model and start the worker. Returns null on success or a
-    /// sentence to show the operator; it never throws, because the caller is
-    /// on the path that starts a recording.
+    /// The cheap half of starting: check the runtime and the model file, and
+    /// learn the rate the audio will arrive at. Returns null when it is safe
+    /// to attach the PCM tap, or a sentence to show the operator.
+    ///
+    /// Split from <see cref="Begin"/> so the caller can attach the tap
+    /// <em>before</em> the model is loaded. Loading takes seconds — a large
+    /// model plus a first CUDA context — and everything said in the room
+    /// during those seconds used to be thrown away, because there was nothing
+    /// listening yet. Now it queues, and the worker catches up on it;
+    /// <see cref="MaxBacklogSeconds"/> bounds what that can cost.
     /// </summary>
-    public string? Start(WaveFormat sourceFormat)
+    public string? Prepare(WaveFormat sourceFormat)
     {
         try
         {
@@ -114,8 +162,34 @@ public sealed class TranscriptionService : IDisposable
 
             var model = WhisperRuntime.ResolveModel(_options.WhisperModelPath);
             if (!model.IsUsable) return Fault(model.Problem ?? "No speech model is available.");
+            _model = model;
 
+            // Set before any audio can arrive: Push uses it to decide whether
+            // a buffer needs re-stretching, and a wrong rate here would
+            // corrupt the very first blocks.
             _sourceSampleRate = Math.Max(8000, sourceFormat.SampleRate);
+            _accepting = true;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return Fault("Speech recognition could not start: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The expensive half: load the model, build the processor and start the
+    /// worker. Returns null on success or a sentence to show the operator; it
+    /// never throws, because the caller is on the path that starts a
+    /// recording.
+    ///
+    /// Call <see cref="Prepare"/> first.
+    /// </summary>
+    public string? Begin()
+    {
+        try
+        {
+            if (!_accepting || _model is not { } model) return Fault("Speech recognition was not prepared.");
 
             // Building the factory is what actually loads the native library,
             // so the runtime label is only meaningful after this line.
@@ -200,19 +274,38 @@ public sealed class TranscriptionService : IDisposable
     private string Fault(string message)
     {
         _faulted = true;
+
+        // Push checks _faulted before anything else, so nothing more arrives
+        // — but whatever queued during the model load is now audio nobody
+        // will ever decode, and it is holding megabytes.
+        lock (_lock)
+        {
+            _pending.Clear();
+            _pendingSamples = 0;
+            _headOffset = 0;
+            _boundaries.Clear();
+        }
+
         StatusChanged?.Invoke(message);
         return message;
     }
 
     /// <summary>
-    /// Hand over one capture buffer. Called on NAudio's capture thread, so
-    /// this does the least work that is possible: downmix to mono and copy.
-    /// No resampling, no allocation beyond the one array, no lock held across
-    /// anything that could block.
+    /// Hand over one capture buffer, with the file time its first sample sits
+    /// at. Called on NAudio's capture thread, so this does the least work that
+    /// is possible: downmix to mono and copy. No resampling, no allocation
+    /// beyond the one array, no lock held across anything that could block.
+    ///
+    /// <paramref name="fileTimeSeconds"/> is not a convenience — it is the
+    /// only thing keeping this pipeline's timestamps on the recording's
+    /// timeline rather than on its own.
     /// </summary>
-    public void Push(byte[] buffer, int bytesRecorded, WaveFormat format)
+    public void Push(byte[] buffer, int bytesRecorded, WaveFormat format, double fileTimeSeconds)
     {
-        if (_stopping || _faulted || _worker is null) return;
+        // Deliberately not "_worker is null": audio arriving while the model
+        // is still loading is queued, not discarded. That window is seconds
+        // long and is usually the start of the meeting.
+        if (_stopping || _faulted || !_accepting) return;
 
         try
         {
@@ -220,12 +313,10 @@ public sealed class TranscriptionService : IDisposable
             if (mono.Length == 0) return;
 
             // A replacement input device after an unplug can deliver a
-            // different sample rate, and this pipeline's whole timebase is
-            // "frames consumed ÷ the rate it started at". Re-stretching the
-            // buffer to that rate keeps every segment time honest; the
-            // interpolation is crude, but it is a recovery path, and a
-            // slightly rougher chunk is worth far more than a transcript
-            // whose clock has quietly drifted away from the marks.
+            // different sample rate. The block is re-stretched to the rate
+            // this pipeline started at so one sample count means one thing
+            // throughout; its file time is the recorder's and needs no
+            // adjustment at all.
             if (format.SampleRate != _sourceSampleRate) mono = Restretch(mono, format.SampleRate);
 
             lock (_lock)
@@ -233,19 +324,20 @@ public sealed class TranscriptionService : IDisposable
                 // Falling behind is a real possibility on a CPU-only machine
                 // with a large model. Dropping the oldest audio keeps the
                 // live view current — which is what it is for — and the
-                // dropped total is reported rather than swallowed.
+                // dropped total is reported rather than swallowed. Nothing
+                // has to be added up to keep the clock right: the block that
+                // becomes the new head carries its own time.
                 var limit = (int)(MaxBacklogSeconds * _sourceSampleRate);
                 while (_pendingSamples + mono.Length > limit && _pending.Count > 0)
                 {
                     var head = _pending.Dequeue();
-                    var dropped = head.Length - _headOffset;
+                    var dropped = head.Samples.Length - _headOffset;
                     _pendingSamples -= dropped;
-                    _consumedFrames += dropped;
                     _headOffset = 0;
                     DroppedSeconds += dropped / (double)_sourceSampleRate;
                 }
 
-                _pending.Enqueue(mono);
+                _pending.Enqueue(new PendingAudio(mono, fileTimeSeconds));
                 _pendingSamples += mono.Length;
             }
 
@@ -350,6 +442,37 @@ public sealed class TranscriptionService : IDisposable
     }
 
     /// <summary>
+    /// Tell the chunker that the operator marked a speaker change at this
+    /// point in the recording.
+    ///
+    /// Whisper decides its own segment boundaries from the audio, and they do
+    /// not know where a turn ended — so a chunk holding the tail of one
+    /// speaker and the opening of the next can come back as a single segment,
+    /// which attribution then has to give away whole. The app knows exactly
+    /// where the handover was, and a chunk that <em>ends</em> there cannot
+    /// produce a segment straddling it. That costs a shorter chunk around
+    /// fast exchanges and buys attribution that matches what the operator
+    /// actually marked, which is the entire point of the feature.
+    ///
+    /// Called from the UI thread on every mark; cheap and non-blocking.
+    /// </summary>
+    public void NoteSpeakerChange(double fileTimeSeconds)
+    {
+        if (_stopping || _faulted || !_accepting) return;
+
+        lock (_lock)
+        {
+            // Ordered, and de-duplicated against the common case of two marks
+            // landing on the same instant (one turn closing as another opens).
+            if (_boundaries.Count > 0 && Math.Abs(_boundaries[^1] - fileTimeSeconds) < 0.05) return;
+            _boundaries.Add(fileTimeSeconds);
+            _boundaries.Sort();
+        }
+
+        _work.Set();
+    }
+
+    /// <summary>
     /// Pull the next chunk out of the pending queue, or null when there is
     /// not enough audio yet. While stopping, whatever is left counts as
     /// enough — a final half-sentence is better than losing it.
@@ -363,25 +486,83 @@ public sealed class TranscriptionService : IDisposable
         // this is not a latency one.
         lock (_lock)
         {
-            chunkStartSeconds = _consumedFrames / (double)_sourceSampleRate;
+            chunkStartSeconds = PendingStartSeconds();
+            if (_pendingSamples == 0) return null;
 
             var minimum = (int)(MinChunkSeconds * _sourceSampleRate);
-            if (_pendingSamples == 0 || (!_stopping && _pendingSamples < minimum)) return null;
+
+            // A marked handover is a better place to end a chunk than any
+            // amount of extra audio, so it also decides when there is
+            // "enough": waiting out the full six seconds would sail straight
+            // past a boundary sitting three seconds in.
+            var boundary = NextBoundary(chunkStartSeconds);
+            if (!_stopping && boundary is null && _pendingSamples < minimum) return null;
 
             var window = Math.Min(_pendingSamples, (int)(MaxChunkSeconds * _sourceSampleRate));
             var chunk = new float[window];
             CopyPending(chunk, window);
 
-            // Cut in a pause rather than mid-word when there is room to
-            // choose; a chunk boundary through a word costs both halves.
-            var take = _stopping && _pendingSamples <= window
-                ? window
-                : QuietestCut(chunk, minimum);
+            int take;
+            if (_stopping && _pendingSamples <= window)
+            {
+                take = window;
+            }
+            else if (boundary is { } at && at <= window)
+            {
+                take = at;
+                _boundaries.RemoveAt(0);
+            }
+            else
+            {
+                // No handover in reach: cut in a pause rather than mid-word.
+                // A chunk boundary through a word costs both halves.
+                take = QuietestCut(chunk, minimum);
+            }
 
+            if (take <= 0) return null;
             if (take < window) Array.Resize(ref chunk, take);
             DiscardPending(take);
             return chunk;
         }
+    }
+
+    /// <summary>
+    /// Where the audio at the head of the queue sits in the recording. This
+    /// is the recorder's own file time, carried in with the buffer, plus
+    /// however far into that block the queue has already been consumed.
+    /// </summary>
+    private double PendingStartSeconds()
+    {
+        if (_pending.Count == 0) return _lastChunkEndSeconds;
+        var head = _pending.Peek();
+        return head.FileTimeSeconds + _headOffset / (double)_sourceSampleRate;
+    }
+
+    /// <summary>
+    /// The first marked handover that falls inside the pending audio, as a
+    /// sample count from the chunk's start — or null when none is in reach.
+    /// Boundaries already behind the head are dropped: a mark made while the
+    /// backlog was being trimmed has nothing left to cut.
+    ///
+    /// A boundary closer to the head than <see cref="MinBoundaryChunkSeconds"/>
+    /// is dropped rather than obeyed — a chunk of a few hundred milliseconds
+    /// decodes badly enough to lose the very words the cut was made to place
+    /// correctly, and it can never come back into range. A usable one is left
+    /// in the list: only an actual cut consumes it.
+    /// </summary>
+    private int? NextBoundary(double chunkStartSeconds)
+    {
+        while (_boundaries.Count > 0 && _boundaries[0] < chunkStartSeconds + MinBoundaryChunkSeconds)
+        {
+            _boundaries.RemoveAt(0);
+        }
+
+        if (_boundaries.Count == 0) return null;
+
+        var offset = (int)((_boundaries[0] - chunkStartSeconds) * _sourceSampleRate);
+        if (offset > _pendingSamples || offset > (int)(MaxChunkSeconds * _sourceSampleRate)) return null;
+
+        return offset;
     }
 
     /// <summary>Copy the first <paramref name="count"/> pending samples without consuming them.</summary>
@@ -393,9 +574,9 @@ public sealed class TranscriptionService : IDisposable
         foreach (var block in _pending)
         {
             if (written >= count) break;
-            var available = block.Length - offset;
+            var available = block.Samples.Length - offset;
             var take = Math.Min(available, count - written);
-            Array.Copy(block, offset, destination, written, take);
+            Array.Copy(block.Samples, offset, destination, written, take);
             written += take;
             offset = 0;
         }
@@ -403,11 +584,12 @@ public sealed class TranscriptionService : IDisposable
 
     private void DiscardPending(int count)
     {
+        var startedAt = PendingStartSeconds();
         var remaining = count;
         while (remaining > 0 && _pending.Count > 0)
         {
             var head = _pending.Peek();
-            var available = head.Length - _headOffset;
+            var available = head.Samples.Length - _headOffset;
             if (available > remaining)
             {
                 _headOffset += remaining;
@@ -421,8 +603,15 @@ public sealed class TranscriptionService : IDisposable
             }
         }
 
-        _pendingSamples -= count - remaining;
-        _consumedFrames += count - remaining;
+        var consumed = count - remaining;
+        _pendingSamples -= consumed;
+
+        // Remembered so an empty queue still knows where the recording had
+        // reached. With blocks left, the new head's own tag is the better
+        // answer — it survives a backlog drop, which arithmetic would not.
+        _lastChunkEndSeconds = _pending.Count > 0
+            ? PendingStartSeconds()
+            : startedAt + consumed / (double)_sourceSampleRate;
     }
 
     /// <summary>
@@ -565,6 +754,13 @@ public sealed class TranscriptionService : IDisposable
         // handle for the Wait/Set/Reset use here, and disposing it could
         // throw inside a worker that is still waiting on it.
     }
+
+    /// <summary>
+    /// One capture buffer waiting to be recognised, and where it sits in the
+    /// recording. The time is the recorder's own, carried rather than
+    /// recomputed — see the class summary.
+    /// </summary>
+    private readonly record struct PendingAudio(float[] Samples, double FileTimeSeconds);
 
     /// <summary>
     /// The float array as an <see cref="ISampleProvider"/>, which is what the

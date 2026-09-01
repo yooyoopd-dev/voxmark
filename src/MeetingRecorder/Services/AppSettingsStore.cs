@@ -30,8 +30,14 @@ public static class AppSettingsStore
         /// is, so it belongs to the PC. Defaults match
         /// <see cref="MeetingRecorder.Models.SessionOptions"/> so a settings.json written
         /// before these keys existed round-trips unchanged.
+        ///
+        /// 0 since v1.2.7 — see
+        /// <see cref="MeetingRecorder.Models.SessionOptions.MarkStartOffsetSeconds"/> for
+        /// why. A settings file that already names a value keeps it: this is
+        /// a preference, and a new default does not get to overwrite one an
+        /// operator chose. Changing it back is Settings ▸ Mark start offset.
         /// </summary>
-        public double MarkStartOffsetSeconds { get; set; } = 0.8;
+        public double MarkStartOffsetSeconds { get; set; }
 
         /// <summary>The MP3 bitrate a new setup begins with.</summary>
         public int Mp3BitrateKbps { get; set; } = 128;

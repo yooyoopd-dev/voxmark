@@ -142,6 +142,15 @@ Implemented, with the guide section each answers to:
 - **08 stop & export** — inline stop confirmation (never a modal), auto-close
   of the open mark, the finalise-pass export screen with per-speaker talk
   time and an honest "Unmarked" row.
+- **Mark start offset defaults to 0** (`SessionOptions.MarkStartOffsetSeconds`).
+  The offset exists because an operator reacting to the room presses the key
+  after the speaker has begun — but it is wrong for one watching the waveform
+  and stamping the boundary they can see, and that is the case it costs most:
+  a shifted mark moves the handover back into the previous speaker's words and
+  hands their last sentence to the wrong name. Settings still offers −0.4 to
+  −1.6 s, the raw press time is still journalled per mark, and **a settings
+  file that already names a value keeps it** — a new default does not overwrite
+  a preference.
 - **09 keyboard** — 1–9/0 and Shift+1/2, Space, Ctrl+Z/Ctrl+Y (unlimited,
   snapshot-based), Ctrl+P, Ctrl+E, Ctrl+N, ↑↓/Enter/Tab/←→, Esc; plus
   **Alt+1…0 / Alt+Shift+1,2 global hotkeys** with the 2-second, focus-free
@@ -255,14 +264,46 @@ is the failure mode this exists to prevent.
 ### Timestamps
 
 Segment times must land on the same timebase as the marks or the whole
-feature is decorative. Audio is consumed strictly in order and nothing is
-dropped silently, so a chunk's start is exactly
-`consumedSourceFrames / sourceSampleRate` — the same "count the samples that
-were written" rule `AudioCaptureService` uses for file time. Chunks are
-resampled to 16 kHz one at a time rather than as a continuous stream, which
-costs a few ms of filter warm-up per boundary (inaudible to a decoder) and
-buys exactly this property. Don't replace it with a streaming resampler
-without solving the drift it reintroduces.
+feature is decorative. **The recorder's file time is carried with the audio,
+never re-derived here**: `PcmAvailable` hands each buffer the position of its
+first sample, every queued block keeps that tag, and a chunk's start is its
+head block's tag plus however far into it the queue has been consumed.
+
+It used to be `consumedSourceFrames / sourceSampleRate` — the pipeline
+counting what it had been given — and that measured the *subscription*, not
+the recording. The tap was attached only after `WhisperFactory.FromPath` had
+loaded the model, several seconds in, so the pipeline treated its own first
+sample as time zero and every segment came out early by exactly that gap, for
+the whole meeting. That is the v1.2.6 sync bug. Anything that reintroduces a
+locally-accumulated clock here brings it back.
+
+`Start` is therefore split in two: `Prepare` does the cheap checks and learns
+the sample rate, the caller attaches the tap, and `Begin` does the model load.
+Audio arriving during the load queues instead of being discarded
+(`MaxBacklogSeconds` bounds it), so the opening of the meeting is transcribed
+too.
+
+Chunks are resampled to 16 kHz one at a time rather than as a continuous
+stream, which costs a few ms of filter warm-up per boundary (inaudible to a
+decoder) and buys a chunk that is exactly the samples it claims to be. Don't
+replace it with a streaming resampler without solving the drift it
+reintroduces.
+
+### Chunks end where the operator marked a handover
+
+Whisper picks its own segment boundaries and knows nothing about the roster,
+so a chunk holding the tail of one speaker and the opening of the next can
+come back as **one segment** — which `TranscriptMapper` then has to award
+whole, putting a sentence under the wrong name. The app knows exactly where
+the handover was, and a chunk that *ends* there cannot produce that segment.
+
+`RecordingWindow.NoteBoundary` feeds every mark and every Space-close to
+`TranscriptionService.NoteSpeakerChange`, and `ChooseChunk` prefers a pending
+boundary over `QuietestCut`'s answer. A boundary also counts as "enough
+audio", so a handover three seconds in is not sailed past while waiting out
+`MinChunkSeconds`. `MinBoundaryChunkSeconds` (2.5 s) is the floor: below it
+the decode degrades enough to lose the words the cut was made to place, so a
+handover that close is left to be resolved by overlap as before.
 
 ## Editions — Lite and Full
 

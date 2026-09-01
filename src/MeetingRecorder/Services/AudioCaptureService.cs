@@ -131,15 +131,25 @@ public sealed class AudioCaptureService : IDisposable
 
     /// <summary>
     /// The raw capture buffer, in the device's own format, for anything that
-    /// wants to listen in — today that is speech recognition.
+    /// wants to listen in — today that is speech recognition. The fourth
+    /// argument is the buffer's own <b>file time</b>: the position in the
+    /// recording its first sample occupies.
+    ///
+    /// That number is the whole point of the signature. A listener that
+    /// counts the audio it has been handed is measuring its own subscription,
+    /// not the recording — and a listener attached a few seconds late (a
+    /// speech model takes that long to load) would then report every
+    /// timestamp early by exactly that gap, for the rest of the meeting.
+    /// Carrying the time with the audio makes the two clocks the same clock.
     ///
     /// A tap, not a stage: it is raised after the audio is safely in the
     /// encoder, and a subscriber that throws is swallowed here, because
     /// nothing downstream of capture is allowed to stop the recording
     /// (section 11). Silent while paused, like the waveform, since paused
-    /// time is not in the file.
+    /// time is not in the file — and silent for a buffer that did not reach
+    /// a file at all, since there would be no audio behind the timestamp.
     /// </summary>
-    public event Action<byte[], int, WaveFormat>? PcmAvailable;
+    public event Action<byte[], int, WaveFormat, double>? PcmAvailable;
 
     /// <summary>Every MP3 written so far, in order.</summary>
     public IReadOnlyList<AudioPart> Parts => _parts;
@@ -353,9 +363,13 @@ public sealed class AudioCaptureService : IDisposable
 
         if (IsPaused) return;
 
-        // Cut the buffer before writing, so each slice carries the file time
-        // it actually starts at rather than the time the buffer ended.
-        var slices = ComputeSlices(e.Buffer, e.BytesRecorded, format, ElapsedSeconds);
+        // Read once, before the write advances it: this is where this
+        // buffer *starts* in the recording. The slices carry it so the
+        // waveform draws at the right place, and the PCM tap carries it so a
+        // transcript lands on the same timebase as the marks.
+        var bufferStartSeconds = ElapsedSeconds;
+        var slices = ComputeSlices(e.Buffer, e.BytesRecorded, format, bufferStartSeconds);
+        var reachedAFile = false;
 
         try
         {
@@ -385,6 +399,7 @@ public sealed class AudioCaptureService : IDisposable
                     _bytesWritten += e.BytesRecorded;
                     _secondsWritten += e.BytesRecorded / (double)Math.Max(1, format.AverageBytesPerSecond);
                     if (_parts.Count > 0) _parts[^1].EndSeconds = ElapsedSeconds;
+                    reachedAFile = true;
                 }
             }
         }
@@ -397,11 +412,11 @@ public sealed class AudioCaptureService : IDisposable
 
         if (slices.Length > 0) SlicesAvailable?.Invoke(slices);
 
-        if (PcmAvailable is { } tap)
+        if (reachedAFile && PcmAvailable is { } tap)
         {
             try
             {
-                tap(e.Buffer, e.BytesRecorded, format);
+                tap(e.Buffer, e.BytesRecorded, format, bufferStartSeconds);
             }
             catch (Exception)
             {
