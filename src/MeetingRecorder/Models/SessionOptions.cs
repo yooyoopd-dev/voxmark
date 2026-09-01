@@ -10,10 +10,20 @@ public sealed class SessionOptions
     public bool AllowOverlappingMarks { get; set; }
 
     /// <summary>
-    /// A human presses the key after the speaker has already begun, so every
-    /// mark start is shifted back by this much automatically (section 07).
+    /// Every mark start is shifted back by this much automatically
+    /// (section 07), on the theory that a human presses the key after the
+    /// speaker has already begun.
+    ///
+    /// The default is <b>0</b>: that theory is right for an operator
+    /// reacting to the room, and wrong for one watching the waveform and
+    /// stamping the boundary they can see — and the second is what a shifted
+    /// mark costs most, because it moves the handover back into the previous
+    /// speaker's words and hands their last sentence to the wrong name.
+    /// Operators who do mark by ear can put it back in Settings; the raw
+    /// press time is journalled per mark either way, so the choice is never
+    /// destructive.
     /// </summary>
-    public double MarkStartOffsetSeconds { get; set; } = 0.8;
+    public double MarkStartOffsetSeconds { get; set; }
 
     public int Mp3BitrateKbps { get; set; } = 128;
 

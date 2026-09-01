@@ -102,6 +102,12 @@ are recognised, a few seconds behind the room, with each line's timecode in
 the colour of whoever was marked at that moment. Scroll it back to re-read;
 it stops following the live edge until you scroll to the bottom again.
 
+The strip appearing a few seconds behind is the decoder working, not a
+mistiming: each line carries the timecode of the audio it came from, which is
+the same clock the marks are on. Recognition also **ends a chunk wherever you
+marked a speaker change**, so a sentence spoken across a handover is not
+decoded as one block and then handed wholesale to one of the two speakers.
+
 ### Running it on the GPU
 
 Speech recognition works on the CPU with no setup at all, but it runs at
@@ -244,6 +250,19 @@ session inside the app only unlists it — VoxMark never deletes your audio.
 
    The existing tables are untouched, so the file still reads exactly as it
    did for anything that already consumed it.
+
+### Marking on the beat
+
+Every mark can be shifted back automatically, on the theory that you press the
+key a moment after the speaker starts. **The default is 0 s** — no shift —
+because most operators watch the waveform and stamp the boundary they can see,
+and a shifted mark moves the handover back into the previous speaker's words,
+which is how their last sentence ends up under the next speaker's name.
+
+If you mark by ear instead, Settings ▸ **Mark start offset** offers −0.4 to
+−1.6 s. VoxMark journals the raw key-press time with every mark either way, so
+the choice is never destructive. Upgrading does not change a value you already
+chose — a saved setting is a preference, not a default.
 
 ### Setting a meeting up in advance
 

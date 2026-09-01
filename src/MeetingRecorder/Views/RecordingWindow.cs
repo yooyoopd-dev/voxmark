@@ -549,7 +549,21 @@ public sealed class RecordingWindow : ShellWindow
         _transcription.SegmentRecognised += OnSegmentRecognised;
         _transcription.StatusChanged += OnTranscriptionStatus;
 
-        var problem = _transcription.Start(_capture.CurrentFormat);
+        // Two halves, and the tap goes on between them. Loading a model takes
+        // seconds — weights off disk plus a first CUDA context — and until
+        // v1.2.7 the tap was attached after all of it, so the opening of the
+        // meeting was never transcribed and, worse, the pipeline treated its
+        // own first sample as time zero and reported every timestamp early by
+        // that gap for the rest of the session. Now the audio queues from the
+        // first buffer and carries the recorder's own file time with it.
+        var problem = _transcription.Prepare(_capture.CurrentFormat);
+        if (problem is null)
+        {
+            _capture.PcmAvailable += _transcription.Push;
+            problem = _transcription.Begin();
+            if (problem is not null) _capture.PcmAvailable -= _transcription.Push;
+        }
+
         if (problem is not null)
         {
             // Named in the banner where the operator will see it, exactly as
@@ -575,8 +589,6 @@ public sealed class RecordingWindow : ShellWindow
         {
             ShowNotice(warning);
         }
-
-        _capture.PcmAvailable += _transcription.Push;
 #endif
     }
 
@@ -909,11 +921,37 @@ public sealed class RecordingWindow : ShellWindow
     {
         if (_awaitingStopConfirm || _stopping) return;
 
-        var result = _marking.Toggle(slot, _capture.ElapsedSeconds);
+        var elapsed = _capture.ElapsedSeconds;
+        var result = _marking.Toggle(slot, elapsed);
+
+        // The boundary is the new turn's own start when one opened — which is
+        // the press time less the mark offset — and the press itself when the
+        // tap only closed something.
+        NoteBoundary(_marking.Open.FirstOrDefault(o => o.SpeakerSlot == slot)?.StartSeconds ?? elapsed);
+
         if (viaHotkey && !IsActive)
         {
-            _toast.ShowMark(_session, result, _capture.ElapsedSeconds);
+            _toast.ShowMark(_session, result, elapsed);
         }
+    }
+
+    /// <summary>
+    /// Tell speech recognition where a turn changed hands, so it can end a
+    /// chunk there.
+    ///
+    /// Whisper picks its own segment boundaries and knows nothing about the
+    /// roster, so a chunk holding the end of one speaker and the start of the
+    /// next can come back as a single segment — which attribution then has to
+    /// award whole, putting a sentence under the wrong name. A chunk that
+    /// ends on the handover cannot produce that segment in the first place.
+    ///
+    /// A no-op in Lite, and while transcription is off or has failed.
+    /// </summary>
+    private void NoteBoundary(double fileSeconds)
+    {
+#if !VOXMARK_LITE
+        _transcription?.NoteSpeakerChange(fileSeconds);
+#endif
     }
 
     /// <summary>
@@ -1025,7 +1063,12 @@ public sealed class RecordingWindow : ShellWindow
                 e.Handled = true;
                 return;
             case Key.Space:
-                _marking.CloseAll(_capture.ElapsedSeconds);
+                // Only a turn that actually ended is a handover; Space on an
+                // idle grid should not cost the chunker a cut.
+                if (_marking.CloseAll(_capture.ElapsedSeconds).ClosedSlot is not null)
+                {
+                    NoteBoundary(_capture.ElapsedSeconds);
+                }
                 e.Handled = true;
                 return;
             case Key.Up:
