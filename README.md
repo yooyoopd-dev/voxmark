@@ -97,7 +97,7 @@ line underneath tells you which model it found and whether it is running on
 `CUDA` or `CPU`. If something is missing it says what, and recording still
 goes ahead without a transcript — transcription can never stop a recording.
 
-While recording, a five-line strip under the minimap shows the words as they
+While recording, a six-line strip under the minimap shows the words as they
 are recognised, a few seconds behind the room, with each line's timecode in
 the colour of whoever was marked at that moment. Scroll it back to re-read;
 it stops following the live edge until you scroll to the bottom again.

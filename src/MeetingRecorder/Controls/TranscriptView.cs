@@ -10,7 +10,7 @@ using MeetingRecorder.Views;
 namespace MeetingRecorder.Controls;
 
 /// <summary>
-/// The live transcript strip on the recording screen: five lines of
+/// The live transcript strip on the recording screen: six lines of
 /// recognised speech, with everything said earlier scrollable above them.
 ///
 /// The operator's job is marking, not reading — the strip is there to confirm
@@ -35,8 +35,14 @@ namespace MeetingRecorder.Controls;
 /// </summary>
 public sealed class TranscriptView : Border
 {
-    /// <summary>Enough to show five lines; the rest scrolls.</summary>
-    public const double StripHeight = 116;
+    /// <summary>
+    /// Enough to show six lines; the rest scrolls. Worked from the parts
+    /// rather than eyeballed: 1px border top and bottom, the 5px padding the
+    /// line stack carries each side, and six rows of a 13pt line (17.3px) plus
+    /// the 3px gap under it — 133.8, rounded up for the same couple of pixels
+    /// of slack the old five-line 116 had.
+    /// </summary>
+    public const double StripHeight = 136;
 
     /// <summary>
     /// Long meetings produce a lot of lines, and every one is a live WPF

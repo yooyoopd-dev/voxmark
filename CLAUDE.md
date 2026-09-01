@@ -126,9 +126,15 @@ Implemented, with the guide section each answers to:
   alone (2→4 / 5–6 / 7–9 / 10–12), roster order fixed for the session. Tiles
   are sized so the whole grid fits the default window height without a
   scrollbar — an operator hunting for a tile that scrolled out of sight is an
-  operator not marking — and section 02's **72px floor is what stops that
-  shrinking**; the two densest bands sit on it already, so any further saving
-  has to come from the waveform, the minimap or the dock instead.
+  operator not marking. Two things hold that:
+  section 02's **72px floor**, which 7–12 speakers already sit on, so no
+  further height can come from the tiles; and the fact that there is **no
+  "＋ Add" cell in the grid**. That cell used to take a whole tile slot, which
+  pushed 4, 6 and 9 speakers onto an extra row and was the single reason the
+  grid did not fit — the header's "＋ Add speaker" and Ctrl+N are the same
+  action for no height at all. Any future addition to the top of this screen
+  has to be paid for out of the waveform, the minimap or the dock; see
+  "The recording screen's height budget" below for the arithmetic.
   Each tile carries ✎ rename and ✕ remove in its top-right corner, opening
   a popup over that tile; both swallow their own click so neither ever
   marks. Removal is refused for a speaker who already has marks — their
@@ -170,7 +176,7 @@ Implemented, with the guide section each answers to:
   See "Losing the input device" below for what that fallback actually has to
   survive.
 - **Speech recognition (Full edition)** — beyond the guide: an opt-in
-  on-device whisper pass, a five-line live transcript strip under the
+  on-device whisper pass, a six-line live transcript strip under the
   minimap, and a `## Transcript` section mapping the words onto the marks.
   Clicking a line in the strip opens it for editing: whisper is good but not
   right, and a name or a piece of jargon it mangles is obvious to the person
@@ -345,6 +351,39 @@ in Lite.
 `AssemblyName` is `VoxMark` in both, so crash logs, session folders and the
 Markdown `tool:` field do not fork; CI renames the Lite output. The running
 app names its own edition through `BuildProfile`, on the library screen.
+
+## The recording screen's height budget
+
+The speaker grid gets whatever the rest of the screen does not take, so every
+pixel added above it comes out of the tiles. It is worth doing the arithmetic
+rather than eyeballing it: v1.2.8 shortened the tiles and claimed the grid fit,
+without multiplying rows × row height against what was actually left, and it
+did not fit at 4, 6, 7, 8, 9, 10, 11 or 12 speakers.
+
+Default window 1360×860 less the 40px `TitleBar` is **820px of body**. Text
+blocks measure `FontSize × 1.33`. The tightest case is the Full edition with
+transcription on (`_compactLayout`):
+
+| block | px |
+|---|---|
+| header (36px buttons set the row; margins 10/8) | 54 |
+| header rule | 1 |
+| waveform well + margin | 156 |
+| minimap row + margin | 23 |
+| transcript row + margin (`StripHeight` 136) | 142 |
+| speakers header + margin | 32 |
+| marks dock (`CompactCollapsedDockHeight`) | 150 |
+| **left for the grid** | **262** |
+
+The grid needs `rows × (tile + 8) + 12`, worst case 3 rows of 72px tiles =
+252 — about 10px spare. Two limits that follow from this and are *not* bugs:
+
+- **A visible notice banner costs ~60px**, so the densest rosters scroll while
+  one is up. A notice is exceptional and the scrollbar is there for it; "no
+  scroll" describes the normal case, not an invariant.
+- **The guarantee is for the default 860px height**, not the 1180×760 minimum
+  section 05 sets. At 760 the grid gets 162px and scrolls, which is what a
+  scrollable grid is for.
 
 ## Settings vs. Setup — what belongs to the PC, what to the meeting
 
