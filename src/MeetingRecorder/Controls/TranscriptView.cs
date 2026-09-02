@@ -105,7 +105,7 @@ public sealed class TranscriptView : Border
         SnapsToDevicePixels = true;
         Height = StripHeight;
 
-        _placeholder = Ui.Text("listening — recognised speech appears here a few seconds behind the room",
+        _placeholder = Ui.Text("Listening — recognised speech appears here a few seconds behind the room",
             12, Palette.TextMutedBrush);
         _placeholder.Margin = new Thickness(10, 6, 10, 6);
 
@@ -287,6 +287,24 @@ public sealed class TranscriptView : Border
             row.Container.Children.Add(row.TextLabel);
         }
 
+        // Hand keyboard focus back to the window rather than leaving it
+        // nowhere. WPF routes key events to the focused element, so with focus
+        // cleared the window's own PreviewKeyDown stops firing — Space, the
+        // digits and every other shortcut went dead until something focusable
+        // was clicked. The window is focusable, and a shortcut handled there
+        // tunnels down as it always did.
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (Window.GetWindow(this) is not { } window) return;
+
+            // Only when nothing else has taken it. The click that closed this
+            // editor may have landed on a real field, and stealing focus back
+            // from it would be worse than the bug being fixed.
+            if (window.IsKeyboardFocusWithin) return;
+
+            Keyboard.Focus(window);
+        }, DispatcherPriority.Input);
+
         // Editing suppressed the auto-scroll, so the strip is still parked on
         // the corrected line. Put it back on the live edge, or the operator
         // fixes one word and never sees another one arrive.
@@ -306,9 +324,15 @@ public sealed class TranscriptView : Border
 
         // Moving focus fires LostKeyboardFocus, which commits through the
         // handler installed above rather than duplicating the logic here.
+        // Focus goes to the window, never to nowhere: Keyboard.ClearFocus()
+        // left the app with no focused element and therefore no keyboard
+        // shortcuts at all.
         var row = _editing;
         var box = row.Container.Children.OfType<TextBox>().FirstOrDefault();
-        if (box is not null && box.IsKeyboardFocusWithin) Keyboard.ClearFocus();
+        if (box is not null && box.IsKeyboardFocusWithin && Window.GetWindow(this) is { } window)
+        {
+            Keyboard.Focus(window);
+        }
 
         // Still open means the field never had focus to lose. Close it by
         // hand, keeping what was typed rather than discarding it.

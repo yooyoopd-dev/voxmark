@@ -111,7 +111,11 @@ All five screens in the guide are built: **S1 Library → S2 Setup → S3 Record
 Implemented, with the guide section each answers to:
 
 - **02 tokens** — the colour ramp, the 12-slot speaker palette, monospaced
-  tabular timecodes, 4px spacing scale, 72×160 minimum tile.
+  tabular timecodes, 4px spacing scale, 72×160 minimum tile. **Slot 01 is
+  `#1428A0` by request**, well outside the OKLCH ring slots 02–12 sit on: it is
+  far darker (L ≈ 0.32) than the eleven around it, so on this dark theme its
+  block and its tile bar read much quieter than the rest. Deliberate, and the
+  reason the slot number and the name stay the primary identifiers.
 - **04 recording** — live 45 s waveform with chapter-marker flags at every
   speaker change, whole-session minimap with the live viewport **and the turn
   in progress drawn as a growing block** (`BlockLaneView.SetLive` — undimmed
@@ -165,6 +169,13 @@ Implemented, with the guide section each answers to:
   −1.6 s, the raw press time is still journalled per mark, and **a settings
   file that already names a value keeps it** — a new default does not overwrite
   a preference.
+- **Only a deliberate close arms the double-tap repair.** `MarkingEngine.Close`
+  takes `armReopen`: re-tapping a speaker's own key or pressing Space arms it,
+  a close caused by handing over to somebody else does not. Arming on every
+  close meant two speakers alternating faster than `ReopenWindowSeconds`
+  (1.2 s) had every handover arm the repair, so the next tap deleted the mark
+  just made, swallowed the other speaker's turn and reopened the older one —
+  the timeline appeared to jump backwards.
 - **09 keyboard** — 1–9/0 and Shift+1/2, Space, Ctrl+Z/Ctrl+Y (unlimited,
   snapshot-based), Ctrl+P, Ctrl+E, Ctrl+N, ↑↓/Enter/Tab/←→, Esc; plus
   **Alt+1…0 / Alt+Shift+1,2 global hotkeys** with the 2-second, focus-free

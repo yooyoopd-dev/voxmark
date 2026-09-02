@@ -396,7 +396,7 @@ public sealed class SetupWindow : ShellWindow
     {
         var header = Ui.Columns(0,
             _rosterHeading,
-            Ui.Text("drag to reorder · click a key cell to reassign", 12, Palette.TextMutedBrush));
+            Ui.Text("Drag to reorder · click a key cell to reassign", 12, Palette.TextMutedBrush));
         header.Margin = new Thickness(0, 0, 0, 10);
 
         _rosterPanel.AllowDrop = true;
@@ -1072,7 +1072,7 @@ public sealed class SetupWindow : ShellWindow
     private void ValidateDate()
     {
         var ok = TryParseDate(out _);
-        _dateHint.Text = ok ? "" : "unrecognised — using now";
+        _dateHint.Text = ok ? "" : "Unrecognised — using now";
         _dateHint.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
         _dateTime.Foreground = ok ? Palette.TextBrush : Palette.RecBrush;
         UpdateFolderPreview();
@@ -1127,7 +1127,7 @@ public sealed class SetupWindow : ShellWindow
 
         _options.TranscriptionEnabled = _transcriptionPreferred && ready;
 
-        _modelName.Text = model.Path.Length > 0 ? model.Name : "none found";
+        _modelName.Text = model.Path.Length > 0 ? model.Name : "None found";
         _modelName.Foreground = ready ? Palette.AccentTextBrush : Palette.TextMutedBrush;
 
         _syncingTranscription = true;

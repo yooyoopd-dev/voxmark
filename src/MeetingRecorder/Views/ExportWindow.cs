@@ -125,7 +125,7 @@ public sealed class ExportWindow : ShellWindow
                 ? Palette.GoodBrush
                 : markdownState == "pending" ? Palette.AccentBrush : Palette.RecBrush;
             var detail = written ? FileSize(markdownPath)
-                : markdownState == "pending" ? "writing…" : markdownState;
+                : markdownState == "pending" ? "Writing…" : markdownState;
 
             _files.Children.Add(FileRow(glyph, brush, Path.GetFileName(markdownPath), detail));
         }
@@ -140,7 +140,7 @@ public sealed class ExportWindow : ShellWindow
                     : markdownState == "pending" ? Palette.AccentBrush : Palette.RecBrush,
                 Path.GetFileName(combinedPath),
                 combinedWritten ? FileSize(combinedPath) + " · whole session"
-                    : markdownState == "pending" ? "writing…" : markdownState));
+                    : markdownState == "pending" ? "Writing…" : markdownState));
 
             _files.Children.Add(Ui.Wrap(
                 "Every per-part Markdown carries audio_part_start — subtract it from a timestamp to seek inside " +
@@ -299,7 +299,7 @@ public sealed class ExportWindow : ShellWindow
     {
         try
         {
-            if (!File.Exists(path)) return "not written";
+            if (!File.Exists(path)) return "Not written";
             var bytes = new FileInfo(path).Length;
             return bytes >= 1024 * 1024
                 ? (bytes / 1024.0 / 1024.0).ToString("0.0") + " MB"

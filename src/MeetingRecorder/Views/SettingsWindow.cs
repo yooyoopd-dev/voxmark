@@ -464,7 +464,7 @@ public sealed class SettingsWindow : ShellWindow
     {
         var model = WhisperRuntime.ResolveModel(TranscriptionSettingsStore.Load().ModelPath);
 
-        _modelName.Text = model.Path.Length > 0 ? model.Name : "none found";
+        _modelName.Text = model.Path.Length > 0 ? model.Name : "None found";
         _modelName.Foreground = model.IsUsable ? Palette.AccentTextBrush : Palette.TextMutedBrush;
 
         // LoadedRuntimeLabel is deliberately not shown here: nothing has built
