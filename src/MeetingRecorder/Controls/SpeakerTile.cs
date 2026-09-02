@@ -3,7 +3,6 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
-using System.Windows.Shapes;
 using MeetingRecorder.Models;
 using MeetingRecorder.Theme;
 
@@ -41,8 +40,7 @@ public sealed class SpeakerTile : Border
     private readonly TextBlock _key;
     private readonly TextBlock _meta;
     private readonly TextBlock _markTime;
-    private readonly TextBlock? _role;
-    private readonly Ellipse? _roleDot;
+    private readonly TextBlock _role;
     private readonly Border? _talkTrack;
     private readonly Border? _talkFill;
     private readonly Border _colourBar;
@@ -147,34 +145,25 @@ public sealed class SpeakerTile : Border
         bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        if (density == TileDensity.Tight)
+        // The sub title shows at every density, in the bottom row's left cell.
+        // It costs no height anywhere: that row is already as tall as _meta
+        // (12.5pt), and even the small variant is shorter than that.
+        //
+        // The two densest bands used to get a coloured dot here instead, which
+        // said nothing the 3px colour bar down the tile's left edge does not
+        // already say — and said it in place of the one thing an operator
+        // hunting for the right tile could actually use.
+        _role = new TextBlock
         {
-            // Role text drops to a coloured dot; cumulative time stays.
-            _roleDot = new Ellipse
-            {
-                Width = 7,
-                Height = 7,
-                Fill = new SolidColorBrush(_color),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            Grid.SetColumn(_roleDot, 0);
-            bottom.Children.Add(_roleDot);
-        }
-        else if (density != TileDensity.Dense)
-        {
-            _role = new TextBlock
-            {
-                Text = speaker.Role,
-                FontFamily = Ui,
-                FontSize = 12,
-                Foreground = Palette.TextMutedBrush,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            Grid.SetColumn(_role, 0);
-            bottom.Children.Add(_role);
-        }
+            Text = speaker.Role,
+            FontFamily = Ui,
+            FontSize = density is TileDensity.Roomy or TileDensity.Default ? 12 : 10,
+            Foreground = Palette.TextMutedBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(_role, 0);
+        bottom.Children.Add(_role);
 
         if (density == TileDensity.Roomy)
         {

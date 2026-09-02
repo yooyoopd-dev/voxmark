@@ -504,12 +504,25 @@ the split was avoiding. The suffix is `_full` rather than the bare stem
 because a session that rolled a file after an input change already has
 `{base}.mp3` as its part 1.
 
+The roster front matter names each speaker with `title:` and `subtitle:`
+(`name:`/`role:` before v1.3.0). The app never reads its own Markdown back, so
+this only matters to whatever consumes the file downstream.
+
 `## Agent Instructions` is the one section every export carries, transcript
 or not: the standing brief for the LLM the file is handed to, asking for a
 `transcript.md` holding the verbatim per-speaker transcript, an executive
-summary, per-speaker key points, and the same summary and key points again
-in Korean. It exists so the operator does not retype that prompt after every
-meeting. It is written in English whatever language the meeting was in,
+summary and per-speaker key points. It exists so the operator does not retype
+that prompt after every meeting.
+
+**The report follows the meeting's language, the brief does not.** Section 1
+is verbatim in whatever was spoken and is never translated on the way in — the
+old "transcribe in English, translate if it was another language" order made a
+Korean transcript unreachable. Sections 2 and 3 are written in Korean when the
+transcript is Korean, and the `## 한국어 리포트` section is then **skipped**,
+because it would only repeat them; otherwise 2 and 3 are English and that
+fourth section is added. The branch is decided by the agent at read time, like
+every other branch in the brief — the exporter cannot know what language the
+words will come back in. It is written in English whatever language the meeting was in,
 because it addresses the agent rather than the room. Changing what it asks
 for changes what every downstream agent produces, so treat its wording as
 interface, not prose.
@@ -524,8 +537,10 @@ separate `## Gaps` section are all unchanged; only their position in the
 document moved, and they gained a heading of their own so the table is not
 left floating under someone else's prose.
 
-`AppendRecognitionCautions` is written into both routes, since Route B skips
-the alignment step where the first of the two would otherwise be caught.
+`AppendRecognitionCautions` is emitted **once**, above Step 2 — Route B is
+told to skip Step 2 entirely, so a caution parked underneath it reaches only
+half the readers, and calling it from both places (which v1.2.8 did) printed
+the whole block twice on every file carrying a transcript.
 Both are reports from the operator about this material rather than general
 caveats about whisper, which is why they read as facts and not as hedging:
 English recognition here occasionally returns a word with **no relation to

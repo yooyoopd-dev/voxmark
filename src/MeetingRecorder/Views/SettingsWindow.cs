@@ -155,7 +155,12 @@ public sealed class SettingsWindow : ShellWindow
         var close = Ui.MakeButton("Close", "Esc", "AccentButton", (_, _) => Close());
         close.MinHeight = 40;
 
-        var footerRow = Ui.Columns(0, _status, close);
+        // Which build is running, where a support question can find it.
+        var version = Ui.Text(BuildProfile.VersionLine, 11.5, Palette.TextMutedBrush);
+        version.VerticalAlignment = VerticalAlignment.Center;
+        version.Margin = new Thickness(0, 0, 16, 0);
+
+        var footerRow = Ui.Columns(0, _status, version, close);
         footerRow.Margin = new Thickness(22, 14, 22, 14);
 
         var footer = new Border
