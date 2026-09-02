@@ -404,6 +404,7 @@ in [`CLAUDE.md`](CLAUDE.md) for the full list and the reasoning.
 https://huggingface.co/ggerganov/whisper.cpp/tree/main
 
 Galaxy Book 4 Ultra (CUDA RTX 4050): ggml-large-v3-turbo-q8_0.bin
+
 Galaxy Book (Non-CUDA): ggml-small-q5_1.bin (English only: ggml-small.en-q5_1.bin)
 
 https://developer.nvidia.com/cuda-12-0-0-download-archive
