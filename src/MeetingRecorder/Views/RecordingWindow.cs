@@ -375,13 +375,29 @@ public sealed class RecordingWindow : ShellWindow
     /// The transcript strip and its header. Recognition runs a few seconds
     /// behind the room by nature, so the header says so rather than letting
     /// the lag read as a fault.
+    ///
+    /// The "click a line to correct it" hint lives here, under the model
+    /// name, rather than on a tooltip over the lines themselves. A tooltip
+    /// that pops up wherever the pointer rests is noise on a screen the
+    /// operator is watching, and it only ever appeared once the pointer was
+    /// already on the thing it described — which is the moment it is least
+    /// useful. Standing text says the same thing without waiting to be
+    /// hovered, and costs no height: the column beside a 136px strip has
+    /// room for a second line several times over.
     /// </summary>
     private UIElement BuildTranscriptRow()
     {
+        var hint = Ui.Wrap("Click a line to correct it", 10, Palette.TextFaintBrush);
+        hint.MaxWidth = 200;
+        hint.Margin = new Thickness(0, 3, 0, 0);
+
+        var side = Ui.Vertical(0, _transcriptStatus!, hint);
+        side.VerticalAlignment = VerticalAlignment.Top;
+
         var row = Ui.Columns(1,
             Fixed(Ui.Section("Transcript"), 64),
             _transcriptView!,
-            PadLeft(_transcriptStatus!, 10));
+            PadLeft(side, 10));
         row.Margin = new Thickness(20, 6, 20, 0);
         return row;
     }

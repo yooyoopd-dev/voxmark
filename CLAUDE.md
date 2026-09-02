@@ -111,11 +111,15 @@ All five screens in the guide are built: **S1 Library → S2 Setup → S3 Record
 Implemented, with the guide section each answers to:
 
 - **02 tokens** — the colour ramp, the 12-slot speaker palette, monospaced
-  tabular timecodes, 4px spacing scale, 72×160 minimum tile. **Slot 01 is
-  `#1428A0` by request**, well outside the OKLCH ring slots 02–12 sit on: it is
-  far darker (L ≈ 0.32) than the eleven around it, so on this dark theme its
-  block and its tile bar read much quieter than the rest. Deliberate, and the
-  reason the slot number and the name stay the primary identifiers.
+  tabular timecodes, 4px spacing scale, 72×160 minimum tile. The speaker
+  palette is **not** the guide's single-lightness OKLCH ring any more: even
+  30° spacing gave three greens and two blues, because neighbours differed on
+  one axis only. The set in `Palette.Speakers` varies hue, chroma and
+  lightness together and adds the tan and grey a categorical palette needs to
+  reach twelve, and every slot measures **at least 5:1** against the well
+  behind it — `#1428A0`, briefly slot 01, measured 1.45:1, which on this dark
+  theme is a block you cannot find. Slot 01 is still blue. Colour stays a
+  secondary cue; the slot number and the title are the primary identifiers.
 - **04 recording** — live 45 s waveform with chapter-marker flags at every
   speaker change, whole-session minimap with the live viewport **and the turn
   in progress drawn as a growing block** (`BlockLaneView.SetLive` — undimmed

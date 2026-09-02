@@ -10,23 +10,40 @@ namespace MeetingRecorder.Theme;
 public static class Palette
 {
     /// <summary>
-    /// Twelve fixed speaker slots. Slots 02–12 are one OKLCH ring at
-    /// L 0.72 / C 0.11 stepped 30°, so no colour outweighs another.
+    /// Twelve fixed speaker slots, chosen to be told apart rather than to sit
+    /// evenly on a ring.
     ///
-    /// Slot 01 is <c>#1428A0</c> by request. It sits well outside that ring —
-    /// far darker (L ≈ 0.32) than the eleven around it — so on this dark
-    /// theme it reads as a deep navy rather than as one of the set, and its
-    /// block in the minimap and its bar on the tile are much quieter than the
-    /// rest. That is the trade being made deliberately; the slot number and
-    /// the name remain the primary identifiers, as they have to be at twelve
-    /// speakers where adjacent hues are not reliably distinguishable in a dim
-    /// room anyway.
+    /// The previous set was one OKLCH ring at a single lightness, 30° apart.
+    /// Even spacing reads well as a swatch strip and badly as twelve tiles in
+    /// a dim room: neighbouring hues differ on one axis only, so slots 08–10
+    /// were three greens and 01/11 were two blues. This set varies hue,
+    /// chroma <em>and</em> lightness together, and includes the two families
+    /// a categorical palette needs to reach twelve — a desaturated tan and a
+    /// near-neutral grey — so no two slots differ by hue alone.
+    ///
+    /// Slot 01 stays in the blue family it was asked to be, but readable:
+    /// <c>#1428A0</c> measured 1.45:1 against the well behind it, which on
+    /// this dark theme is a block you cannot find. Every slot here is at
+    /// least 5:1, and none is above 9:1, so no colour shouts over the rest.
+    ///
+    /// Colour is still a secondary cue — the slot number and the title remain
+    /// the primary identifiers, because twelve of anything is more than a
+    /// glance can resolve.
     /// </summary>
     public static readonly Color[] Speakers =
     {
-        Rgb(0x1428A0), Rgb(0xD182C9), Rgb(0xE58095), Rgb(0xE58E6C),
-        Rgb(0xC9A04F), Rgb(0xA2B04F), Rgb(0x74BD6F), Rgb(0x4EC39B),
-        Rgb(0x4EC1BD), Rgb(0x5FB8DE), Rgb(0x7AABF0), Rgb(0x8F8FA8),
+        Rgb(0x5A8DFF), // 01 blue
+        Rgb(0xB98CFF), // 02 lavender
+        Rgb(0xED72E0), // 03 orchid
+        Rgb(0xFF7A94), // 04 rose
+        Rgb(0xFF9455), // 05 orange
+        Rgb(0xE0B93C), // 06 gold
+        Rgb(0xA7CC3D), // 07 lime
+        Rgb(0x4FB85E), // 08 green
+        Rgb(0x2FD1A0), // 09 emerald
+        Rgb(0x38C3E8), // 10 cyan
+        Rgb(0xB58463), // 11 tan
+        Rgb(0xA8A3B5), // 12 grey
     };
 
     public static readonly Color Void = Rgb(0x0E1019);
