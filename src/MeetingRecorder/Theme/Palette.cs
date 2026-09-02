@@ -10,15 +10,21 @@ namespace MeetingRecorder.Theme;
 public static class Palette
 {
     /// <summary>
-    /// Twelve fixed speaker slots: one OKLCH ring at L 0.72 / C 0.11 stepped
-    /// 30°, so no colour outweighs another. Slot 01 is the system accent.
-    /// Colour is a secondary cue — the slot number and the name are the
-    /// primary identifiers, because at twelve speakers adjacent hues are not
-    /// reliably distinguishable in a dim room.
+    /// Twelve fixed speaker slots. Slots 02–12 are one OKLCH ring at
+    /// L 0.72 / C 0.11 stepped 30°, so no colour outweighs another.
+    ///
+    /// Slot 01 is <c>#1428A0</c> by request. It sits well outside that ring —
+    /// far darker (L ≈ 0.32) than the eleven around it — so on this dark
+    /// theme it reads as a deep navy rather than as one of the set, and its
+    /// block in the minimap and its bar on the tile are much quieter than the
+    /// rest. That is the trade being made deliberately; the slot number and
+    /// the name remain the primary identifiers, as they have to be at twelve
+    /// speakers where adjacent hues are not reliably distinguishable in a dim
+    /// room anyway.
     /// </summary>
     public static readonly Color[] Speakers =
     {
-        Rgb(0x9184D9), Rgb(0xD182C9), Rgb(0xE58095), Rgb(0xE58E6C),
+        Rgb(0x1428A0), Rgb(0xD182C9), Rgb(0xE58095), Rgb(0xE58E6C),
         Rgb(0xC9A04F), Rgb(0xA2B04F), Rgb(0x74BD6F), Rgb(0x4EC39B),
         Rgb(0x4EC1BD), Rgb(0x5FB8DE), Rgb(0x7AABF0), Rgb(0x8F8FA8),
     };

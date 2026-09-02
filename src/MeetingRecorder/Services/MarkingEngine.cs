@@ -14,9 +14,11 @@ public sealed record MarkToggleResult(int? OpenedSlot, int? ClosedSlot, double C
 ///   - Press B while A is open → A closes at now, B opens at now. One
 ///     boundary, no gap.
 ///   - Press A again while A is open → A closes. Nothing opens.
-///   - Press A within 1.2 s of A closing → the previous mark is reopened
-///     rather than a short second one being created, which silently repairs
-///     the most common double-tap error.
+///   - Press A within 1.2 s of A being closed *deliberately* — by tapping A
+///     again, or by Space — and the previous mark is reopened rather than a
+///     short second one being created, which silently repairs the most common
+///     double-tap error. A close caused by handing over to another speaker
+///     does not arm this; see Close().
 ///   - Overlap off (default): opening B always closes A. Overlap on: both
 ///     stay open.
 ///
@@ -110,7 +112,7 @@ public sealed class MarkingEngine
         var already = _open.FirstOrDefault(o => o.SpeakerSlot == slot);
         if (already is not null)
         {
-            var mark = Close(already, now);
+            var mark = Close(already, now, armReopen: true);
             Commit(before);
             return new MarkToggleResult(null, slot, mark?.DurationSeconds ?? 0, now, false);
         }
@@ -124,7 +126,7 @@ public sealed class MarkingEngine
             {
                 foreach (var other in _open.ToList())
                 {
-                    var closed = Close(other, now);
+                    var closed = Close(other, now, armReopen: false);
                     closedSlot = other.SpeakerSlot;
                     closedDuration = closed?.DurationSeconds ?? 0;
                 }
@@ -147,7 +149,7 @@ public sealed class MarkingEngine
         {
             foreach (var other in _open.ToList())
             {
-                var closed = Close(other, now);
+                var closed = Close(other, now, armReopen: false);
                 closedSlot = other.SpeakerSlot;
                 closedDuration = closed?.DurationSeconds ?? 0;
             }
@@ -177,7 +179,7 @@ public sealed class MarkingEngine
         double closedDuration = 0;
         foreach (var open in _open.ToList())
         {
-            var mark = Close(open, now);
+            var mark = Close(open, now, armReopen: true);
             closedSlot = open.SpeakerSlot;
             closedDuration = mark?.DurationSeconds ?? 0;
         }
@@ -193,13 +195,25 @@ public sealed class MarkingEngine
         var before = Capture();
         foreach (var open in _open.ToList())
         {
-            var mark = Close(open, now);
+            var mark = Close(open, now, armReopen: false);
             if (mark is not null) mark.AutoClosed = true;
         }
         Commit(before);
     }
 
-    private Mark? Close(OpenMark open, double now)
+    /// <summary>
+    /// Close one open mark.
+    ///
+    /// <paramref name="armReopen"/> decides whether a tap on the same speaker
+    /// in the next <see cref="ReopenWindowSeconds"/> reopens this mark instead
+    /// of starting a new one. Only a <em>deliberate</em> close arms it —
+    /// re-tapping that speaker's own key, or Space. A close caused by handing
+    /// over to somebody else must not, and that was the bug: two speakers
+    /// alternating faster than 1.2 s meant every handover armed the repair, so
+    /// the next tap deleted the mark just made, swallowed the other speaker's
+    /// turn and reopened the older one. The timeline appeared to jump back.
+    /// </summary>
+    private Mark? Close(OpenMark open, double now, bool armReopen)
     {
         _open.Remove(open);
 
@@ -214,9 +228,19 @@ public sealed class MarkingEngine
         };
         _marks.Add(mark);
 
-        _lastClosedSlot = open.SpeakerSlot;
-        _lastClosedId = mark.Id;
-        _lastClosedAt = now;
+        if (armReopen)
+        {
+            _lastClosedSlot = open.SpeakerSlot;
+            _lastClosedId = mark.Id;
+            _lastClosedAt = now;
+        }
+        else
+        {
+            // A handover is the operator saying "this one now", so anything
+            // armed before it is stale.
+            _lastClosedSlot = null;
+        }
+
         return mark;
     }
 
@@ -614,7 +638,7 @@ public sealed class MarkingEngine
         Journal.RecordOpenState(_open);
     }
 
-    private string NameOf(int slot) => SpeakerNameResolver?.Invoke(slot) ?? ("slot " + (slot + 1).ToString());
+    private string NameOf(int slot) => SpeakerNameResolver?.Invoke(slot) ?? ("Slot " + (slot + 1).ToString());
 
     private void Announce(string message) => Notice?.Invoke(message);
 }

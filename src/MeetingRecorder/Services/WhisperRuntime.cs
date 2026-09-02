@@ -524,7 +524,7 @@ public static class WhisperRuntime
     /// </summary>
     public static string LoadedRuntimeLabel => RuntimeOptions.LoadedLibrary switch
     {
-        null => "not loaded",
+        null => "Not loaded",
         RuntimeLibrary.Cuda => "CUDA",
         RuntimeLibrary.Vulkan => "Vulkan",
         RuntimeLibrary.OpenVino => "OpenVINO",

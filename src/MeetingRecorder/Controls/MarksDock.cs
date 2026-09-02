@@ -88,7 +88,7 @@ public sealed class MarksDock : Border
         BorderThickness = new Thickness(0, 1, 0, 0);
 
         _heading = Ui.Section("Marks · live repair", Palette.AccentBrush);
-        _subheading = Ui.Text("recording continues while you edit", 12, Palette.TextMutedBrush);
+        _subheading = Ui.Text("Recording continues while you edit", 12, Palette.TextMutedBrush);
 
         _expandButton = Ui.MakeButton("Expand ⌃", "Ctrl+E", "ChipButtonAccent", (_, _) => Toggle());
 
@@ -271,8 +271,8 @@ public sealed class MarksDock : Border
 
         _heading.Text = _expanded ? "MARKS · " + all.Count : "MARKS · LIVE REPAIR";
         _subheading.Text = _expanded
-            ? "newest first · one row open at a time"
-            : "who is marked right now — reassign without stopping";
+            ? "Newest first · one row open at a time"
+            : "Who is marked right now — reassign without stopping";
 
         _lane.TotalSeconds = Math.Max(1, _engine.CurrentFileSeconds);
         _lane.SelectedMarkId = SelectedMarkId;
@@ -379,7 +379,7 @@ public sealed class MarksDock : Border
         var trailing = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         if (_expanded)
         {
-            trailing.Children.Add(Ui.Text(suspect ?? "click to edit", 12,
+            trailing.Children.Add(Ui.Text(suspect ?? "Click to edit", 12,
                 suspect is null ? Palette.TextMutedBrush : Palette.RecBrush));
         }
         else
@@ -514,7 +514,7 @@ public sealed class MarksDock : Border
             Pad(Ui.Text(speaker?.Name ?? "Unknown", 15), 0, 12),
             ReassignDropdown(mark),
             Ui.Filler(),
-            Ui.Text("editing does not pause the recorder", 11.5, Palette.TextMutedBrush));
+            Ui.Text("Editing does not pause the recorder", 11.5, Palette.TextMutedBrush));
 
         var startField = BoundaryField("Start", Ui.Tenths(mark.StartSeconds), MarkBoundary.Start,
             delta => _engine.NudgeStart(mark.Id, delta));

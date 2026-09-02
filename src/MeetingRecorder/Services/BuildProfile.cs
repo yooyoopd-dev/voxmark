@@ -62,6 +62,6 @@ public static class BuildProfile
 
     /// <summary>What the library screen shows beside the heading.</summary>
     public static string Subtitle => HasTranscription
-        ? "stored locally · nothing leaves this machine · Full edition, speech recognition available"
-        : "stored locally · nothing leaves this machine · Lite edition, no speech recognition";
+        ? "Stored locally · nothing leaves this machine · Full edition, speech recognition available"
+        : "Stored locally · nothing leaves this machine · Lite edition, no speech recognition";
 }

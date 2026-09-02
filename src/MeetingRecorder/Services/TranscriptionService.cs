@@ -232,7 +232,7 @@ public sealed class TranscriptionService : IDisposable
             };
             _worker.Start();
 
-            StatusChanged?.Invoke(model.Warning ?? "listening");
+            StatusChanged?.Invoke(model.Warning ?? "Listening");
             return null;
         }
         catch (Exception ex)
@@ -658,7 +658,7 @@ public sealed class TranscriptionService : IDisposable
         {
             // One bad chunk is not a reason to give up on the rest of the
             // meeting; say so once and carry on with the next.
-            StatusChanged?.Invoke("a chunk could not be recognised (" + ex.Message + ") — still listening");
+            StatusChanged?.Invoke("A chunk could not be recognised (" + ex.Message + ") — still listening");
         }
     }
 
@@ -721,7 +721,7 @@ public sealed class TranscriptionService : IDisposable
         {
             if (!_worker.Join(timeout))
             {
-                StatusChanged?.Invoke("stopped with " + BacklogSeconds.ToString("0") +
+                StatusChanged?.Invoke("Stopped with " + BacklogSeconds.ToString("0") +
                                       " s still unrecognised — the audio is complete in the MP3");
             }
         }

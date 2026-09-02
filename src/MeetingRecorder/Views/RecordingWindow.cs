@@ -160,7 +160,7 @@ public sealed class RecordingWindow : ShellWindow
         _marking = new MarkingEngine(session.Options);
         _journal = new MarkJournal(session.JournalPath);
         _marking.Journal = _journal;
-        _marking.SpeakerNameResolver = slot => session.SpeakerForSlot(slot)?.Name ?? ("slot " + (slot + 1));
+        _marking.SpeakerNameResolver = slot => session.SpeakerForSlot(slot)?.Name ?? ("Slot " + (slot + 1));
 
         _recDot = new Ellipse
         {
@@ -206,7 +206,7 @@ public sealed class RecordingWindow : ShellWindow
 
         _speakersHeading = Ui.Section("Speakers · " + session.Speakers.Count + " of 12");
         _rosterHint = Ui.Text(
-            "keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.",
+            "Keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.",
             12, Palette.TextMutedBrush);
 
         _addName = InlineField("Title");
@@ -235,7 +235,7 @@ public sealed class RecordingWindow : ShellWindow
             _transcription = new TranscriptionService(session.Options);
             _transcriptView = new TranscriptView();
             _transcriptView.TextEdited += OnTranscriptEdited;
-            _transcriptStatus = Ui.Text("starting…", 11, Palette.TextMutedBrush);
+            _transcriptStatus = Ui.Text("Starting…", 11, Palette.TextMutedBrush);
             // Anything long enough to need more room than this belongs in the
             // notice banner, which is where the real failures already go.
             _transcriptStatus.MaxWidth = 200;
@@ -486,8 +486,8 @@ public sealed class RecordingWindow : ShellWindow
 
         _speakersHeading.Text = ("Speakers · " + count + " of 12").ToUpperInvariant();
         _rosterHint.Text = count >= 12
-            ? "roster is full — mark absent participants instead of adding a thirteenth"
-            : "keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.";
+            ? "Roster is full — mark absent participants instead of adding a thirteenth"
+            : "Keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.";
 
         _toast.SetRoster(_session.Speakers);
     }
@@ -572,7 +572,7 @@ public sealed class RecordingWindow : ShellWindow
             // than looking like recognition that never got going.
             ShowNotice(problem + " The meeting is still recording.");
             _transcriptView.ShowUnavailable("No transcript for this meeting — see the notice above.");
-            _transcriptStatus.Text = "unavailable";
+            _transcriptStatus.Text = "Unavailable";
             _transcriptNoticeUntil = DateTime.MaxValue;
             return;
         }
@@ -882,12 +882,12 @@ public sealed class RecordingWindow : ShellWindow
             // format mid-meeting rolls a new file whether a split was asked
             // for or not, and the operator should not have to discover that
             // in the folder afterwards.
-            _partLabel.Text = count > 1 ? "file " + count + " · rolled after an input change" : "";
+            _partLabel.Text = count > 1 ? "File " + count + " · rolled after an input change" : "";
             if (count > 1) _partLabel.Margin = new Thickness(0, 0, 20, 0);
             return;
         }
 
-        _partLabel.Text = "file " + count + " · splits every " + _session.Options.SplitMinutes + " min";
+        _partLabel.Text = "File " + count + " · splits every " + _session.Options.SplitMinutes + " min";
         _partLabel.Margin = new Thickness(0, 0, 20, 0);
     }
 

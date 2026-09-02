@@ -63,7 +63,7 @@ public sealed class LibraryWindow : ShellWindow
             Child = Ui.Vertical(10,
                 Ui.Columns(0,
                     _plansHeading,
-                    Ui.Text("meetings you set up earlier — pick one to open its setup", 12,
+                    Ui.Text("Meetings you set up earlier — pick one to open its setup", 12,
                         Palette.TextMutedBrush)),
                 _plans),
         };
@@ -193,7 +193,7 @@ public sealed class LibraryWindow : ShellWindow
     private UIElement PlanRow(MeetingPlan plan)
     {
         var roster = plan.Speakers.Count == 0
-            ? "no roster yet"
+            ? "No roster yet"
             : plan.Speakers.Count + " speakers · " +
               string.Join(", ", plan.Speakers.Take(3).Select(s => s.Name)) +
               (plan.Speakers.Count > 3 ? " …" : "");

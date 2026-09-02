@@ -187,7 +187,7 @@ public sealed class RosterRow : Border
         {
             _keyCell.Content = new TextBlock
             {
-                Text = "press 1–9, 0, ⇧1, ⇧2",
+                Text = "Press 1–9, 0, ⇧1, ⇧2",
                 FontFamily = Ui.MonoFont,
                 FontSize = 11,
                 Foreground = Palette.AccentTextStrongBrush,
@@ -207,7 +207,7 @@ public sealed class RosterRow : Border
         _keyCell.BorderBrush = Palette.RecBrush;
         _keyCell.Content = new TextBlock
         {
-            Text = "already taken",
+            Text = "Already taken",
             FontFamily = Ui.MonoFont,
             FontSize = 11,
             Foreground = Palette.RecTextBrush,

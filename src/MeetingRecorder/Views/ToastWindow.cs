@@ -223,7 +223,7 @@ public sealed class ToastWindow : Window
         }
 
         _detail.Text = closed is null
-            ? "nothing was open before this"
+            ? "Nothing was open before this"
             : closed.Name + " closed at " + MarkdownExporter.Timestamp(result.ClosedAt) +
               " · " + result.ClosedDuration.ToString("0.0") + " s";
 
