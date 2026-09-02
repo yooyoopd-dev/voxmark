@@ -209,8 +209,8 @@ public sealed class RecordingWindow : ShellWindow
             "keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.",
             12, Palette.TextMutedBrush);
 
-        _addName = InlineField("Name");
-        _addRole = InlineField("Role");
+        _addName = InlineField("Title");
+        _addRole = InlineField("Sub title");
         _addStrip = BuildAddStrip();
 
         _confirmText = Ui.Text("", 14, Palette.RecTextBrush);
@@ -271,6 +271,7 @@ public sealed class RecordingWindow : ShellWindow
         // window close is not an exit while recording.
         Closing += OnClosing;
         PreviewKeyDown += OnPreviewKeyDown;
+        PreviewMouseLeftButtonDown += OnPreviewMouseDown;
         Activated += (_, _) => _toast.HideNow();
 
         // A popup lives in its own window, so it would otherwise stay on
@@ -440,8 +441,8 @@ public sealed class RecordingWindow : ShellWindow
 
         var row = Ui.Columns(2,
             Ui.Text("New speaker", 12.5, Palette.AccentTextBrush),
-            PadLeft(FieldCard("Name", _addName), 14),
-            PadLeft(FieldCard("Role", _addRole), 10),
+            PadLeft(FieldCard("Title", _addName), 14),
+            PadLeft(FieldCard("Sub title", _addRole), 10),
             confirm,
             cancel);
 
@@ -1027,6 +1028,52 @@ public sealed class RecordingWindow : ShellWindow
 
     // ------------------------------------------------------------- keyboard
 
+    /// <summary>
+    /// A click anywhere outside the transcript strip closes whatever line is
+    /// open for editing.
+    ///
+    /// The field commits on losing keyboard focus, which covers a click on
+    /// another field or button — but most of this screen is not focusable.
+    /// Clicking the waveform, the minimap or a speaker tile moves no focus at
+    /// all, so the editor stayed open, the strip stayed frozen on that row,
+    /// and recognised lines piled up unseen behind it.
+    /// </summary>
+    private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+#if !VOXMARK_LITE
+        if (_transcriptView is null || !_transcriptView.IsEditing) return;
+        if (e.OriginalSource is DependencyObject source && IsInside(source, _transcriptView)) return;
+
+        _transcriptView.CommitEdit();
+#endif
+    }
+
+#if !VOXMARK_LITE
+    /// <summary>Is this element the given ancestor, or inside it?</summary>
+    private static bool IsInside(DependencyObject source, DependencyObject ancestor)
+    {
+        for (var node = source; node is not null; node = VisualOrLogicalParent(node))
+        {
+            if (ReferenceEquals(node, ancestor)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Walk up. Visual first, then logical — a click can originate inside a
+    /// control template whose visual parent chain reaches the window, and a
+    /// popup or content presenter is only connected logically.
+    /// </summary>
+    private static DependencyObject? VisualOrLogicalParent(DependencyObject node)
+    {
+        if (node is Visual or System.Windows.Media.Media3D.Visual3D)
+        {
+            if (VisualTreeHelper.GetParent(node) is { } visual) return visual;
+        }
+        return LogicalTreeHelper.GetParent(node);
+    }
+#endif
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         // While a tile's rename card is open the digits belong to the name
@@ -1276,7 +1323,7 @@ public sealed class RecordingWindow : ShellWindow
 
         var body = Ui.Vertical(10,
             Ui.Section("Rename speaker"),
-            Ui.Well(Ui.Vertical(0, Ui.Text("Name", 10, Palette.TextMutedBrush), field),
+            Ui.Well(Ui.Vertical(0, Ui.Text("Title", 10, Palette.TextMutedBrush), field),
                 new Thickness(10, 6, 10, 6), 6),
             Ui.Columns(0, Ui.Filler(), save, cancel));
 

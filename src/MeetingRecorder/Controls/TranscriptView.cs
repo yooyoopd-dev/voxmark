@@ -287,6 +287,11 @@ public sealed class TranscriptView : Border
             row.Container.Children.Add(row.TextLabel);
         }
 
+        // Editing suppressed the auto-scroll, so the strip is still parked on
+        // the corrected line. Put it back on the live edge, or the operator
+        // fixes one word and never sees another one arrive.
+        if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
+
         if (changed) TextEdited?.Invoke(row.Segment);
     }
 

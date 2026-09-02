@@ -16,7 +16,13 @@ namespace MeetingRecorder.Services;
 /// </summary>
 public static class MarkdownExporter
 {
-    public const string ToolVersion = "VoxMark 1.2";
+    /// <summary>
+    /// The <c>tool:</c> field. Taken from the build rather than typed here,
+    /// because a hardcoded string is one more thing to forget on a release —
+    /// this one had said 1.2 since v1.2.0.
+    /// </summary>
+    public static string ToolVersion =>
+        BuildProfile.Version.Length > 0 ? "VoxMark " + BuildProfile.Version : "VoxMark";
 
     /// <summary>The Markdown for a whole, unsplit session.</summary>
     public static string Build(RecordingSession session)
@@ -173,8 +179,8 @@ public static class MarkdownExporter
         foreach (var speaker in session.PresentSpeakers.OrderBy(s => s.SlotIndex))
         {
             sb.Append("  - id: ").Append(speaker.Id).Append('\n');
-            sb.Append("    name: ").Append(Yaml(speaker.Name)).Append('\n');
-            sb.Append("    role: ").Append(Yaml(speaker.Role)).Append('\n');
+            sb.Append("    title: ").Append(Yaml(speaker.Name)).Append('\n');
+            sb.Append("    subtitle: ").Append(Yaml(speaker.Role)).Append('\n');
         }
 
         sb.Append("unmarked_duration: ").Append(Timestamp(gaps.Sum(g => g.Duration))).Append('\n');
@@ -368,8 +374,9 @@ public static class MarkdownExporter
     /// dozen lines further down, under its own "## Speaker segments" heading.
     ///
     /// Written in English regardless of the meeting's own language — it
-    /// addresses the agent, not the room — while the report it asks for is
-    /// bilingual.
+    /// addresses the agent, not the room. The report it asks for follows the
+    /// meeting instead: verbatim in whatever was spoken, summarised in Korean
+    /// for a Korean transcript and in English plus a Korean section otherwise.
     /// </summary>
     private static void AppendAgentInstructions(StringBuilder sb, AudioPart part, int partCount,
                                                 bool hasTranscript, bool whole)
@@ -415,9 +422,7 @@ public static class MarkdownExporter
             sb.Append("checked against the audio by a person, so keep wording you cannot verify\n");
             sb.Append("rather than \"improving\" it, and say once at the top of `transcript.md`\n");
             sb.Append("that it was built from the embedded recognition rather than the\n");
-            sb.Append("recording. If that text is not in English, translate it.\n\n");
-
-            AppendRecognitionCautions(sb);
+            sb.Append("recording. Keep it in the language it was spoken in.\n\n");
         }
         else
         {
@@ -428,9 +433,16 @@ public static class MarkdownExporter
             sb.Append("of a meeting you cannot hear would be invention, not a transcript.\n\n");
         }
 
+        // Once, and above Step 2 rather than below it: Route B is told to skip
+        // Step 2 entirely, so a caution parked underneath it reaches only half
+        // the readers. It used to be appended in both places, which printed it
+        // twice on every file that carried a transcript.
+        AppendRecognitionCautions(sb);
+
         sb.Append("### Step 2 — align the speech to the speakers (Route A only)\n\n");
-        sb.Append("1. Transcribe the audio in **English**. If the meeting was held in another\n");
-        sb.Append("   language, translate it into English and say which language it was.\n");
+        sb.Append("1. Transcribe the audio **in the language it was spoken in** — do not\n");
+        sb.Append("   translate as you go. Say at the top of `transcript.md` which language\n");
+        sb.Append("   that was.\n");
         sb.Append("2. Align what you hear to the speaker rows below **by time**. A row's\n");
         sb.Append("   `start` and `end` bound that speaker's turn, so speech inside that range\n");
         sb.Append("   is theirs. Do not invent speaker changes the table does not show.\n");
@@ -439,8 +451,6 @@ public static class MarkdownExporter
         sb.Append("   table — it is a person's live record, and it is the point of this file.\n");
         sb.Append("4. Speech inside a `## Gaps` range has no marked speaker. File it under\n");
         sb.Append("   \"Unmarked\" rather than guessing who was talking.\n\n");
-
-        AppendRecognitionCautions(sb);
 
         sb.Append("### Step 3 — write `transcript.md`\n\n");
         // The split rule belongs to both routes, not to Route A's alignment
@@ -464,22 +474,29 @@ public static class MarkdownExporter
             sb.Append("hold the same marks, cut up.\n\n");
         }
         sb.Append("Write every timestamp in the same `HH:MM:SS.mmm` form and on the same\n");
-        sb.Append("timebase as this file, so the two can be read side by side. Then write\n");
-        sb.Append("these four sections, in this order:\n\n");
-        sb.Append("1. `## Full Transcript` — the verbatim English transcript in chronological\n");
-        sb.Append("   order, one block per speaker turn, each headed with the same mark number,\n");
-        sb.Append("   speaker id, name and time range this file uses. This is the record of\n");
-        sb.Append("   what was actually said: do not summarise or condense it. Removing pure\n");
-        sb.Append("   filler (\"um\", false starts) is the only editing allowed.\n");
-        sb.Append("2. `## Executive Summary` — the whole meeting in a few paragraphs of\n");
-        sb.Append("   English: what it was about, what was decided, what is still open, and\n");
-        sb.Append("   every owner and deadline that was named.\n");
-        sb.Append("3. `## Key Points by Speaker` — one English subsection per speaker, giving\n");
-        sb.Append("   that person's main points, positions, commitments and open questions.\n");
-        sb.Append("4. `## 한국어 리포트` — sections 2 and 3 again in Korean, as\n");
-        sb.Append("   `### 전체 회의 요약` and `### 화자별 핵심 내용`. Translate the meaning\n");
-        sb.Append("   rather than word for word, and leave names, product names and figures as\n");
-        sb.Append("   they were spoken.\n\n");
+        sb.Append("timebase as this file, so the two can be read side by side.\n\n");
+
+        sb.Append("**Which language to write in.** If the transcript you are working from is\n");
+        sb.Append("in Korean, write sections 2 and 3 in Korean and **skip section 4** — it\n");
+        sb.Append("would only repeat them. Otherwise write 2 and 3 in English and add section\n");
+        sb.Append("4. Section 1 is verbatim either way, in whatever language was spoken.\n\n");
+
+        sb.Append("Then write these sections, in this order:\n\n");
+        sb.Append("1. `## Full Transcript` — the verbatim transcript in chronological order,\n");
+        sb.Append("   in the language it was spoken in, one block per speaker turn, each\n");
+        sb.Append("   headed with the same mark number, speaker id, title and time range this\n");
+        sb.Append("   file uses. This is the record of what was actually said: do not\n");
+        sb.Append("   summarise, condense or translate it. Removing pure filler (\"um\", false\n");
+        sb.Append("   starts) is the only editing allowed.\n");
+        sb.Append("2. `## Executive Summary` — the whole meeting in a few paragraphs: what it\n");
+        sb.Append("   was about, what was decided, what is still open, and every owner and\n");
+        sb.Append("   deadline that was named.\n");
+        sb.Append("3. `## Key Points by Speaker` — one subsection per speaker, giving that\n");
+        sb.Append("   person's main points, positions, commitments and open questions.\n");
+        sb.Append("4. `## 한국어 리포트` — **only when 2 and 3 are in English.** Sections 2\n");
+        sb.Append("   and 3 again in Korean, as `### 전체 회의 요약` and\n");
+        sb.Append("   `### 화자별 핵심 내용`. Translate the meaning rather than word for\n");
+        sb.Append("   word, and leave names, product names and figures as they were spoken.\n\n");
 
         sb.Append("Ground every statement in your source. Where it is unclear, write\n");
         sb.Append("`[inaudible HH:MM:SS.mmm]` instead of guessing, and never add a decision,\n");
@@ -488,8 +505,10 @@ public static class MarkdownExporter
 
     /// <summary>
     /// What machine recognition gets wrong in this room, and what to do about
-    /// it. Written into both routes, because Route B skips the alignment step
-    /// where the first of these would otherwise be caught.
+    /// it. Emitted <b>once</b>, above Step 2 rather than inside it: Route B is
+    /// told to skip Step 2 entirely, so a caution parked underneath it reaches
+    /// only half the readers. It was briefly appended in both places, which
+    /// printed the whole block twice on every file carrying a transcript.
     ///
     /// Both are reports from the operator rather than general caveats about
     /// whisper, which is why they are stated as facts about this recording

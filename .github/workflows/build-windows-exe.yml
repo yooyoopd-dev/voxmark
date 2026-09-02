@@ -30,6 +30,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The exe reports this in Settings and in the Markdown "tool:" field, so
+      # it has to be the tag it was cut from. Blank on a plain main-branch
+      # push, where the csproj's own <Version> stands instead.
+      - name: Work out the version to stamp
+        id: version
+        shell: pwsh
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          # A tag push, or the manual route with a version typed in. Anything
+          # else builds unstamped.
+          $raw = ""
+          if ($env:MANUAL_VERSION) { $raw = $env:MANUAL_VERSION }
+          elseif ($env:GITHUB_REF -like "refs/tags/v*") { $raw = $env:GITHUB_REF_NAME }
+
+          # MSBuild wants 1.3.0; the tag is v1.3.0. Anything that is not three
+          # numbers is ignored rather than passed on to the compiler.
+          $version = $raw -replace "^v", ""
+          if ($version -notmatch "^\d+\.\d+\.\d+$") { $version = "" }
+
+          $stamp = ""
+          if ($version) { $stamp = "-p:Version=$version" }
+          "stamp=$stamp" >> $env:GITHUB_OUTPUT
+          Write-Host "Version stamp: '$stamp'"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -46,6 +71,7 @@ jobs:
           -p:Edition=Lite
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
+          ${{ steps.version.outputs.stamp }}
           -o publish/lite
 
       # AssemblyName is VoxMark in both editions, so the two builds share a
@@ -62,6 +88,7 @@ jobs:
           -p:Edition=Full
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
+          ${{ steps.version.outputs.stamp }}
           -o publish/full
 
       # Neither EXE is allowed to ship a loose DLL beside it — that is the

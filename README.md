@@ -215,9 +215,12 @@ session inside the app only unlists it — VoxMark never deletes your audio.
 2. **Setup** — title the meeting, pick the input device and watch the level
    meter (it defaults to whatever Windows itself calls the default input, and
    says plainly whether a quiet meter means silence or a device that is not
-   sending anything), build the roster. Each speaker gets a marking key (1-9, 0, then
-   Shift+1/Shift+2) that you can reassign by clicking its key cell; absent
-   people keep their slot and colour. Save the roster as a preset to reuse it.
+   sending anything), build the roster. Each speaker has a **Title** and a
+   **Sub title** — a name and whatever else helps you pick them out mid-meeting
+   (role, team, seat) — and a marking key (1-9, 0, then Shift+1/Shift+2) you can
+   reassign by clicking its key cell; absent people keep their slot and colour.
+   Both lines show on the speaker's tile while recording. Save the roster as a
+   preset to reuse it.
 3. **Record & mark** — press a speaker's key (or click their tile) when they
    start; press another speaker's key to hand over in one boundary. Every
    mark start is backdated 0.8 s, because a human always presses late.

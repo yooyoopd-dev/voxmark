@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace MeetingRecorder.Services;
 
 /// <summary>
@@ -18,6 +20,45 @@ public static class BuildProfile
     public const bool HasTranscription = true;
     public const string Name = "Full";
 #endif
+
+    /// <summary>
+    /// The version this exe was built as — "1.3.0". Comes from the csproj,
+    /// which CI overrides with the release tag, so what Settings shows and
+    /// what the download was called cannot drift apart.
+    ///
+    /// Read from the informational version and cut at the first "+": the SDK
+    /// appends "+&lt;commit sha&gt;" when it knows one, which is useful in a
+    /// crash log and noise in a settings footer. Never throws — a missing
+    /// attribute costs a version string, not a screen.
+    /// </summary>
+    public static string Version
+    {
+        get
+        {
+            try
+            {
+                var assembly = Assembly.GetExecutingAssembly();
+                var informational = assembly
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+                if (!string.IsNullOrWhiteSpace(informational))
+                {
+                    var plus = informational.IndexOf('+');
+                    return plus > 0 ? informational[..plus] : informational;
+                }
+
+                return assembly.GetName().Version?.ToString(3) ?? "";
+            }
+            catch (Exception)
+            {
+                return "";
+            }
+        }
+    }
+
+    /// <summary>"VoxMark 1.3.0 · Full edition", or the edition alone if the version is unknown.</summary>
+    public static string VersionLine =>
+        (Version.Length > 0 ? "VoxMark " + Version + " · " : "VoxMark · ") + Name + " edition";
 
     /// <summary>What the library screen shows beside the heading.</summary>
     public static string Subtitle => HasTranscription
