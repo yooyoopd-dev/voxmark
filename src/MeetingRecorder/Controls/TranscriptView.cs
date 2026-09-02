@@ -170,8 +170,11 @@ public sealed class TranscriptView : Border
         time.Margin = new Thickness(0, 2, 8, 0);
 
         var text = Ui.Wrap(segment.Text, 13, Palette.TextSecondaryBrush);
+        // The I-beam is the affordance; the standing hint beside the strip
+        // says the rest. A tooltip here popped up over the live text the
+        // operator was reading, and only once the pointer was already on the
+        // line it described.
         text.Cursor = Cursors.IBeam;
-        text.ToolTip = "Click to correct this line";
 
         var row = Ui.Columns(1, time, text);
         row.Margin = new Thickness(0, 0, 0, 3);
