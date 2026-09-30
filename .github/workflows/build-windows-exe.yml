@@ -136,10 +136,17 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      # A convenience copy of each build, not the distribution channel — the
+      # Release below is. Two exes come to ~390 MB a run, which exhausted the
+      # account's Actions storage at the default 90-day retention; a full
+      # quota must not stop a release, so this step is allowed to fail and
+      # keeps its copies for a week only.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: VoxMark-win-x64
+          retention-days: 7
           path: |
             publish/full/VoxMark.exe
             publish/lite/VoxMark-Lite.exe
