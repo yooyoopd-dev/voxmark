@@ -26,6 +26,8 @@ jobs:
     # accessible by integration").
     permissions:
       contents: write
+      # Deleting old build artifacts, see "Prune old build artifacts".
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
@@ -135,6 +137,36 @@ jobs:
               }
           }
           if ($failed) { exit 1 }
+
+      # Actions artifact storage is a quota, and two exes are ~390 MB a run,
+      # so keep only the newest artifact and delete the rest before uploading
+      # this run's. Not on pull requests: that token may not hold actions:
+      # write, and a PR build has no business deleting main's copies. GitHub
+      # recalculates the quota every 6-12 hours, so the space shows as free
+      # only after that.
+      - name: Prune old build artifacts
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "${{ github.repository }}"
+          $all = @()
+          $page = 1
+          do {
+              $batch = (gh api "repos/$repo/actions/artifacts?per_page=100&page=$page" | ConvertFrom-Json).artifacts
+              $all += $batch
+              $page++
+          } while ($batch.Count -eq 100)
+          $stale = $all | Where-Object { -not $_.expired } |
+                   Sort-Object { [datetime]$_.created_at } -Descending |
+                   Select-Object -Skip 1
+          foreach ($artifact in $stale) {
+              gh api -X DELETE "repos/$repo/actions/artifacts/$($artifact.id)" | Out-Null
+              Write-Host "Deleted artifact $($artifact.id) from $($artifact.created_at)"
+          }
+          Write-Host "Kept the newest artifact; deleted $(@($stale).Count)."
 
       # A convenience copy of each build, not the distribution channel — the
       # Release below is. Two exes come to ~390 MB a run, which exhausted the
