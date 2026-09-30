@@ -1,4 +1,6 @@
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using Whisper.net.LibraryLoader;
 
 namespace MeetingRecorder.Services;
@@ -537,6 +539,41 @@ public static class WhisperRuntime
         // compiler sees object.ToString()'s nullable return and warns.
         var other => other.Value.ToString(),
     };
+
+    /// <summary>
+    /// The model path in a form whisper.cpp can open, or null when there is
+    /// none.
+    ///
+    /// whisper.cpp decodes the path it is given as UTF-8 and throws a C++
+    /// exception on anything that is not — which reaches .NET only as
+    /// "External component has thrown an exception". Whisper.net 1.8.1
+    /// marshals that path as ANSI, which on Korean Windows is CP949, so any
+    /// path with Hangul in it (a Korean user name, or a Documents folder that
+    /// OneDrive has moved to "OneDrive\문서") crashed the load. The app
+    /// manifest makes the process's ANSI code page UTF-8, which fixes it at
+    /// the root; this covers a Windows that ignored that setting, by falling
+    /// back to the 8.3 short name, which is plain ASCII where the volume
+    /// keeps one.
+    /// </summary>
+    public static string? NativeSafePath(string path)
+    {
+        if (GetACP() == Utf8CodePage || path.All(c => c < 128)) return path;
+
+        var shortPath = new StringBuilder(1024);
+        var length = GetShortPathName(path, shortPath, (uint)shortPath.Capacity);
+        if (length == 0 || length >= shortPath.Capacity) return null;
+
+        var candidate = shortPath.ToString();
+        return candidate.All(c => c < 128) ? candidate : null;
+    }
+
+    private const uint Utf8CodePage = 65001;
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetACP();
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string longPath, StringBuilder shortPath, uint bufferLength);
 
     /// <summary>"ggml-small.en.bin" reads better in a header as "small.en".</summary>
     public static string ShortModelName(string fileName)

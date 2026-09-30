@@ -191,9 +191,16 @@ public sealed class TranscriptionService : IDisposable
         {
             if (!_accepting || _model is not { } model) return Fault("Speech recognition was not prepared.");
 
+            if (WhisperRuntime.NativeSafePath(model.Path) is not { } nativePath)
+            {
+                return Fault("The speech engine cannot open a model whose path contains non-English " +
+                             "characters on this PC. Move " + model.Name + " to a folder such as " +
+                             @"C:\VoxMark\Models and choose it again in Settings.");
+            }
+
             // Building the factory is what actually loads the native library,
             // so the runtime label is only meaningful after this line.
-            _factory = WhisperFactory.FromPath(model.Path, new WhisperFactoryOptions { UseGpu = true });
+            _factory = WhisperFactory.FromPath(nativePath, new WhisperFactoryOptions { UseGpu = true });
 
             var builder = _factory.CreateBuilder()
                 // Leave one core for the recorder and the UI; whisper will
