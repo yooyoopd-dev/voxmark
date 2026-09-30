@@ -12,8 +12,12 @@
     <!-- What Settings and the Markdown "tool:" field report. CI overrides it
          with -p:Version from the release tag, so a published exe always names
          the tag it was cut from; a local or main-branch build keeps this. -->
-    <Version>1.3.2</Version>
+    <Version>1.3.3</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
+    <!-- Sets the process's ANSI code page to UTF-8, which the whisper
+         model path depends on — see the comment inside the manifest. Copied
+         into the single-file host along with the icon. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
 
     <!-- Single-file, self-contained Windows build. No .NET runtime install
          is required on the machine that runs the resulting .exe. See

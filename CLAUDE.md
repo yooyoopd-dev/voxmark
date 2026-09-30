@@ -298,6 +298,25 @@ chosen in Settings after the first probe would otherwise never be searched. **Do
 don't remove the fallback notice: a five-times-slower engine that says nothing
 is the failure mode this exists to prevent.
 
+### Non-ASCII model paths
+
+whisper.cpp decodes the model path as UTF-8 (`wstring_convert<codecvt_utf8>`
+in `whisper.dll`) and throws a C++ `range_error` on anything else, which
+reaches .NET as a bare `SEHException` — "External component has thrown an
+exception". Whisper.net 1.8.1 declares that P/Invoke `CharSet.Ansi`, so on
+Korean Windows the path arrives as CP949 and **any Hangul in it kills the
+load**: a Korean user name, or Documents moved by OneDrive to `OneDrive\문서`,
+which is what a new Galaxy Book does by default. First seen on a Core Ultra
+laptop, but it has nothing to do with the CPU.
+
+The fix is `app.manifest`'s `activeCodePage` = UTF-8: the process's ANSI code
+page becomes UTF-8, so ANSI marshalling produces exactly what whisper.cpp
+reads. CI checks both exes carry it. `WhisperRuntime.NativeSafePath` is the
+fallback for a Windows that ignored it — the 8.3 short name if it is ASCII,
+otherwise a sentence telling the operator to move the file. Don't drop the
+manifest to "simplify" the project; and if Whisper.net is ever upgraded,
+check how it marshals that path before assuming this is still needed.
+
 ### Timestamps
 
 Segment times must land on the same timebase as the marks or the whole

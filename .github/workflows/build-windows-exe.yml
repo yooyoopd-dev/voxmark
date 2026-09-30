@@ -113,10 +113,40 @@ jobs:
               ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
           if ($failed) { exit 1 }
 
+      # The manifest sets the process's ANSI code page to UTF-8, without
+      # which a whisper model under a Hangul path (a Korean user name,
+      # OneDrive's "문서") crashes the speech engine. It rides in the
+      # single-file host's resources, so check it actually got there rather
+      # than trusting the property. The host sits at the front of the file.
+      - name: Check both EXEs carry the UTF-8 manifest
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($exe in Get-ChildItem publish -Recurse -Filter *.exe) {
+              $stream = [System.IO.File]::OpenRead($exe.FullName)
+              try {
+                  $head = New-Object byte[] ([Math]::Min($stream.Length, 64MB))
+                  [void]$stream.Read($head, 0, $head.Length)
+              } finally { $stream.Dispose() }
+              $text = [System.Text.Encoding]::ASCII.GetString($head)
+              if ($text -notmatch "<activeCodePage[^>]*>UTF-8</activeCodePage>") {
+                  Write-Host "::error::$($exe.Name) is missing the UTF-8 activeCodePage manifest"
+                  $failed = $true
+              }
+          }
+          if ($failed) { exit 1 }
+
+      # A convenience copy of each build, not the distribution channel — the
+      # Release below is. Two exes come to ~390 MB a run, which exhausted the
+      # account's Actions storage at the default 90-day retention; a full
+      # quota must not stop a release, so this step is allowed to fail and
+      # keeps its copies for a week only.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: VoxMark-win-x64
+          retention-days: 7
           path: |
             publish/full/VoxMark.exe
             publish/lite/VoxMark-Lite.exe
