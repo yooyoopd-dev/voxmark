@@ -12,7 +12,7 @@ namespace MeetingRecorder.Controls;
 /// <summary>
 /// The live transcript strip on the recording screen: nine lines of
 /// recognised speech, with everything said earlier scrollable above them —
-/// or, at the operator's choice, a strip twice that tall.
+/// or, at the operator's choice, a taller one of fourteen.
 ///
 /// The operator's job is marking, not reading — the strip is there to confirm
 /// that recognition is alive and roughly on time, and a much taller one would
