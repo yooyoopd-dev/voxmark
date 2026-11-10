@@ -87,9 +87,16 @@ public sealed class ExportWindow : ShellWindow
         var openFolder = Ui.MakeButton("Open folder", null, "GhostButton", (_, _) => OpenFolder());
         openFolder.MinHeight = 40;
 
+        // Only offered when there are words to review: a button that opens an
+        // empty list is a question the operator cannot answer.
+        var review = Ui.MakeButton("Review transcript…", null, "GhostButton", (_, _) => ReviewTranscript());
+        review.MinHeight = 40;
+        review.Margin = new Thickness(10, 0, 0, 0);
+        review.Visibility = _session.Transcript.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
         var done = Ui.MakeButton("Done", null, "AccentButton", (_, _) => Finish());
 
-        var actions = Ui.Columns(2, openFolder, _copyButton, Ui.Filler(), done);
+        var actions = Ui.Columns(3, openFolder, _copyButton, review, Ui.Filler(), done);
         actions.Margin = new Thickness(0, 20, 0, 0);
 
         var content = new StackPanel();
@@ -341,6 +348,32 @@ public sealed class ExportWindow : ShellWindow
         catch (Exception)
         {
             _copyButton.Content = "Could not copy";
+        }
+    }
+
+    /// <summary>
+    /// Open the whole transcript for correction, then rewrite every Markdown
+    /// if anything changed. The export is a view of the session, so the
+    /// corrected words reach the file by the same path the originals did —
+    /// there is no second exporter to keep in step.
+    /// </summary>
+    private void ReviewTranscript()
+    {
+        try
+        {
+            var editor = new TranscriptEditorWindow(_session) { Owner = this };
+            editor.ShowDialog();
+            if (!editor.Changed) return;
+
+            _session.Transcript = _session.Transcript.OrderBy(t => t.StartSeconds).ToList();
+            BuildSummary();
+            RefreshFiles("pending");
+            _copyButton.Content = "Copy Markdown";
+            Dispatcher.InvokeAsync(WriteMarkdown, DispatcherPriority.Background);
+        }
+        catch (Exception ex)
+        {
+            AppPaths.Note("The transcript review could not be opened: " + ex.Message);
         }
     }
 

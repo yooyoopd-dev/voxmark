@@ -66,9 +66,10 @@ interaction rule.
 - **NAudio** for capture (`WaveInEvent`) and **NAudio.Lame** for MP3
   encoding (bundles `libmp3lame.dll`, x86+x64, as content — no ffmpeg
   process, no runtime download, matching the design guide's build note).
-- **Whisper.net 1.8.1** for speech recognition, in the Full edition only.
-  See "Speech recognition" below for why it is not faster-whisper and why
-  the version is pinned.
+- **Whisper.net 1.8.1** for speech recognition, in the Full edition only,
+  with its CPU, CUDA and Vulkan runtimes. See "Speech recognition" below for
+  why it is not faster-whisper, why the version is pinned, and which engine
+  loads where.
 - Layout: `src/MeetingRecorder/`
   - `Theme/` — `Tokens.xaml` (the section 02 colour tokens), `Controls.xaml`
     (button/input/scrollbar skins), `Palette.cs` (the same tokens for the
@@ -200,7 +201,22 @@ Implemented, with the guide section each answers to:
   further wiring — plus an `{"op":"edit"}` line appended to
   `transcript.jsonl`, which `Replay` applies over the original. Appended, not
   patched: the file is opened for append and fsync'd per line precisely so a
-  crash cannot cost what came before.
+  crash cannot cost what came before. Two more repairs use the same journal:
+  **✕ strike-out** (`{"op":"delete"}`) for a line nobody said — whisper's
+  hallucinations over silence are not correctable by typing — and **⤒ join**
+  onto the line above (an `edit` carrying the new `end`, then a `delete`), for
+  a sentence whisper cut in two. Tab and Shift+Tab commit and step to the
+  neighbouring line. The strip's **⤢** toggle doubles its height out of the
+  grid's share (`TranscriptView.ExpandedStripHeight`), remembered per PC in
+  `AppSettingsStore.TranscriptStripExpanded`.
+  After the meeting, **Review transcript…** on the export screen opens
+  `TranscriptEditorWindow` — every line with the speaker it will be filed
+  under, click-to-edit, strike-out and join, a filter box and **Replace all**
+  for the name whisper got wrong the same way forty times. It appends to the
+  same `transcript.jsonl` through `TranscriptStore` and the export rewrites
+  every Markdown when it closes with changes, so the corrected words reach
+  the file by the path the originals took. It names no Whisper.net type, so a
+  Lite machine can review and re-export a session a Full one recorded.
   See "Speech recognition" and "Editions" below.
 
 **Deliberately deferred — confirm scope with the user before building:**
@@ -279,13 +295,24 @@ MB extracted) but **not** NVIDIA's `cudart64_12` / `cublas64_12` /
 `cublasLt64_12`, which are ~700 MB between them — bundling them would
 quadruple an exe whose requirement is being one small file. So the CUDA
 backend loads only on a machine that already has them, and Whisper.net falls
-back to the CPU **silently** when it cannot. That fallback costs roughly a
-five-fold slowdown, which shows up to the operator only as a live transcript
-drifting further behind the room, so it is named in three places instead:
-predicted on Setup and in Settings by `WhisperRuntime.InspectGpu` (a
-files-on-disk check, no factory needed), and confirmed from
-`TranscriptionService.DiagnoseRuntime` once the loader has actually run, which
-also writes the full picture to the Settings Log.
+back **silently** when it cannot. Since v1.4.0 the fallback is not straight to
+the CPU: the exe also carries the **Vulkan** engine (`ggml-vulkan-whisper.dll`,
+~21 MB), which needs nothing but the display driver already installed and runs
+on the same NVIDIA card, on Intel Arc / Xe graphics and on AMD. The order is
+CUDA → Vulkan → CPU, set on every `Probe` by `WhisperRuntime.UseEngine` from
+`TranscriptionSettingsStore.Engine` (`auto` / `cuda` / `vulkan` / `cpu` — the
+explicit choices exist for a GPU driver that misbehaves under one engine).
+The loader runs once per process and remembers, so an engine chosen after a
+meeting has transcribed applies at the next launch; Settings says so.
+
+A CPU fallback still costs roughly a five-fold slowdown, which shows up to
+the operator only as a live transcript drifting further behind the room, so it
+is named in three places: predicted on Setup and in Settings by
+`WhisperRuntime.InspectGpu` + `PredictEngine` (a files-on-disk check, no
+factory needed — `vulkan-1.dll` in System32 is the Vulkan tell, `nvcuda.dll`
+the NVIDIA one), and confirmed from `TranscriptionService.DiagnoseRuntime` once
+the loader has actually run, which also writes the full picture to the
+Settings Log.
 
 `Documents\VoxMark\cuda\` is the escape hatch for a machine that cannot run
 NVIDIA's installer — drop the three DLLs there and `Probe` puts the folder on
@@ -297,6 +324,44 @@ CudaPath` can point it at any drive (700 MB is a lot to ask of a full C:), so
 chosen in Settings after the first probe would otherwise never be searched. **Don't "fix" any of this by bundling the CUDA libraries**, and
 don't remove the fallback notice: a five-times-slower engine that says nothing
 is the failure mode this exists to prevent.
+
+### What the decoder is told, and what it is not allowed to say
+
+Four levers in `TranscriptionService.Begin`, all reading
+`TranscriptionSettingsStore` at start rather than `SessionOptions`, because
+they are properties of the machine and the company, not of a meeting:
+
+- **Vocabulary → initial prompt** (`WithPrompt`). Names, products and
+  abbreviations the operator typed in Settings, comma-joined and capped at
+  600 characters by `BuildPrompt` — whisper keeps the *tail* of an over-long
+  prompt, so the cap is what keeps the first-typed terms in play. This is the
+  one lever that fixes a word the model keeps mangling without a different
+  model, and it is free per chunk.
+- **Accuracy → sampling.** Beam search of five (OpenAI's own default) on a
+  GPU, greedy on a CPU; `best` and `fast` force either. Beam costs about
+  twice the decode and finds visibly better text.
+- **Flash attention** (`WhisperFactoryOptions.UseFlashAttention`) only when
+  CUDA is *predicted* to load. The Vulkan build may hand the fused attention
+  op back to the CPU, which would make the GPU path slower than no flash
+  attention at all, and the option has to be set before the load that would
+  confirm the engine.
+- **Chunk lengths follow the engine.** whisper.cpp pads every chunk to its 30 s
+  window before the encoder sees it, so the encoder costs the same for 6 s of
+  speech as for 20. On the CPU, where the encoder dominates, the chunker uses
+  10–22 s instead of the GPU's 6–18 (`CpuMinChunkSeconds` and friends) —
+  fewer encoder passes per minute of meeting, at the price of latency the CPU
+  strip was already paying. A marked handover still cuts early.
+
+And two filters, because whisper invents text where there is none: a chunk
+whose loudest sample is under −60 dBFS (`SilencePeak`) is a muted input, not
+a quiet room, and is not decoded at all; a segment that is only non-speech
+annotation (`[BLANK_AUDIO]`, `(music)`, `♪` — `NonSpeechOnly`) or that
+whisper itself rated as probably-silent *and* low-confidence
+(`NoSpeechProbabilityFloor` / `HallucinationProbabilityCeiling`, which needs
+`WithProbabilities()`) is dropped. Both counts are surfaced on the strip's
+status line rather than hidden, the same way dropped audio is. **Tighten these
+only against recordings**: a filter that eats a quiet interjection is worse
+than one that lets a hallucination through for the operator to strike out.
 
 ### Non-ASCII model paths
 
@@ -366,7 +431,7 @@ handover that close is left to be resolved by overlap as before.
 Two exes from this one source tree, selected by an MSBuild property:
 
 ```powershell
--p:Edition=Full   # default: whisper.cpp + CUDA, 229 MB, compressed
+-p:Edition=Full   # default: whisper.cpp + CUDA + Vulkan, ~235 MB, compressed
 -p:Edition=Lite   # no speech recognition, 157 MB, today's recorder exactly
 ```
 
@@ -415,6 +480,10 @@ The grid needs `rows × (tile + 8) + 12`, worst case 3 rows of 72px tiles =
 - **A visible notice banner costs ~60px**, so the densest rosters scroll while
   one is up. A notice is exceptional and the scrollbar is there for it; "no
   scroll" describes the normal case, not an invariant.
+- **The expanded transcript strip costs another 164px** (`ExpandedStripHeight`
+  300 against `StripHeight` 136), so the grid scrolls whenever it is up. That
+  is the operator's own trade, made with the ⤢ toggle and remembered per PC,
+  and the six-line default is what the budget above is written for.
 - **The guarantee is for the default 860px height**, not the 1180×760 minimum
   section 05 sets. At 760 the grid gets 162px and scrolls, which is what a
   scrollable grid is for.
@@ -427,8 +496,9 @@ is *what the value is about*, not how often it changes:
 - **`SettingsWindow`, reached from the Library** — the machine. Where
   recordings are saved (`AppSettingsStore.SessionsRoot`), the mark-start
   offset and the MP3 bitrate a new meeting starts from, the whisper model
-  file and its language (`TranscriptionSettingsStore`), and the copyable
-  diagnostics Log. An operator sets these once on this PC.
+  file, its language, engine, accuracy and vocabulary
+  (`TranscriptionSettingsStore`), and the copyable diagnostics Log. An
+  operator sets these once on this PC.
 - **`SetupWindow`, before every meeting** — the meeting. Title, date, room,
   the roster and its keys, presets, split interval, overlapping marks, and
   the Live-transcription on/off toggle. Plus the **unskippable input check**

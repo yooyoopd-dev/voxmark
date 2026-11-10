@@ -51,8 +51,23 @@ public sealed class TranscriptStore : IDisposable
     /// </summary>
     public void AppendEdit(TranscriptSegment segment)
     {
+        // The end travels too, so a merge — which lengthens the surviving
+        // line — replays with the span it now covers. Harmless for a plain
+        // correction, where it restates what the line already had.
         Write("{\"op\":\"edit\",\"start\":" + Number(segment.StartSeconds) +
+              ",\"end\":" + Number(segment.EndSeconds) +
               ",\"text\":" + JsonSerializer.Serialize(segment.Text) + "}");
+    }
+
+    /// <summary>
+    /// Record that the operator struck a line out — a hallucinated phrase, a
+    /// neighbour's conversation the microphone caught. Appended like an edit,
+    /// for the same durability reason; <see cref="Replay"/> drops the line it
+    /// names. The recogniser's original stays on the record above it.
+    /// </summary>
+    public void AppendDelete(TranscriptSegment segment)
+    {
+        Write("{\"op\":\"delete\",\"start\":" + Number(segment.StartSeconds) + "}");
     }
 
     private void Write(string line)
@@ -95,10 +110,24 @@ public sealed class TranscriptStore : IDisposable
 
                     // An operator correction, replayed over the line it
                     // corrects. Applied in file order, so the newest wins.
-                    if (root.TryGetProperty("op", out var op) && op.GetString() == "edit")
+                    if (root.TryGetProperty("op", out var op))
                     {
                         var target = segments.FirstOrDefault(s => Math.Abs(s.StartSeconds - start) < 0.005);
-                        if (target is not null) target.Text = text;
+                        switch (op.GetString())
+                        {
+                            case "edit":
+                                if (target is null) break;
+                                target.Text = text;
+                                if (root.TryGetProperty("end", out var end) && end.TryGetDouble(out var endSeconds) &&
+                                    endSeconds > target.StartSeconds)
+                                {
+                                    target.EndSeconds = endSeconds;
+                                }
+                                break;
+                            case "delete":
+                                if (target is not null) segments.Remove(target);
+                                break;
+                        }
                         continue;
                     }
 

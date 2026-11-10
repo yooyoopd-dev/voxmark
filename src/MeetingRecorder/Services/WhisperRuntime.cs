@@ -76,8 +76,11 @@ public static class WhisperRuntime
         // CUDA toolkit can still run on the GPU if the operator keeps the
         // libraries in a folder of their own, that folder has to be on the
         // search path before whisper.cpp tries its CUDA backend, and it can
-        // be chosen in Settings long after the first probe.
+        // be chosen in Settings long after the first probe. The engine order
+        // is the same kind of thing: a Settings choice the loader has to
+        // hear before it runs.
         UseCudaFolder();
+        UseEngine(EnginePreference);
 
         if (_probed) return _probeFailure;
         _probed = true;
@@ -86,12 +89,14 @@ public static class WhisperRuntime
         {
             foreach (var root in CandidateRoots())
             {
-                // Either layout is enough to run: the CPU package lays its
+                // Any one layout is enough to run: the CPU package lays its
                 // libraries out under runtimes/win-x64, the CUDA one under
-                // runtimes/cuda/win-x64. A Full build ships both, but an
-                // override folder may hold only one.
+                // runtimes/cuda/win-x64, the Vulkan one under
+                // runtimes/vulkan/win-x64. A Full build ships all three, but
+                // an override folder may hold only one.
                 if (!File.Exists(Path.Combine(root, "runtimes", "win-x64", "whisper.dll")) &&
-                    !File.Exists(Path.Combine(root, "runtimes", "cuda", "win-x64", "whisper.dll")))
+                    !File.Exists(Path.Combine(root, "runtimes", "cuda", "win-x64", "whisper.dll")) &&
+                    !File.Exists(Path.Combine(root, "runtimes", "vulkan", "win-x64", "whisper.dll")))
                 {
                     continue;
                 }
@@ -272,6 +277,78 @@ public static class WhisperRuntime
         }
     }
 
+    // ---------------------------------------------------------- the engine
+
+    /// <summary>The engine names a settings file may hold, in the order Auto tries them.</summary>
+    public static readonly string[] Engines = { "auto", "cuda", "vulkan", "cpu" };
+
+    /// <summary>
+    /// Tell Whisper.net's loader which native engine to try first.
+    ///
+    /// The loader walks <see cref="RuntimeOptions.RuntimeLibraryOrder"/> and
+    /// keeps the first library that loads, so the order <em>is</em> the
+    /// policy. Auto is CUDA → Vulkan → CPU: CUDA is the fastest and needs
+    /// NVIDIA's 700 MB runtime; Vulkan runs on the same NVIDIA card with only
+    /// its display driver, and on Intel Arc / Xe graphics too; the CPU always
+    /// works. A forced engine still falls back to the CPU, never to nothing —
+    /// recording does not care, but the operator asked for a transcript.
+    ///
+    /// Only effective before the first model load: the loader runs once per
+    /// process and remembers its answer, so a change made in Settings after a
+    /// meeting has transcribed takes effect on the next launch. Settings
+    /// says so. Called on every <see cref="Probe"/>, like the CUDA folder.
+    /// </summary>
+    public static void UseEngine(string? preference)
+    {
+        try
+        {
+            if (RuntimeOptions.LoadedLibrary is not null) return;
+
+            RuntimeOptions.RuntimeLibraryOrder = (preference ?? "auto").Trim().ToLowerInvariant() switch
+            {
+                "cuda" => new List<RuntimeLibrary> { RuntimeLibrary.Cuda, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx },
+                "vulkan" => new List<RuntimeLibrary> { RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx },
+                "cpu" => new List<RuntimeLibrary> { RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx },
+                _ => new List<RuntimeLibrary>
+                {
+                    RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx,
+                },
+            };
+        }
+        catch (Exception)
+        {
+            // The loader's own default order is CUDA first and the CPU last,
+            // which is the Auto policy anyway.
+        }
+    }
+
+    /// <summary>The engine preference as the settings file holds it, normalised to one of <see cref="Engines"/>.</summary>
+    public static string EnginePreference
+    {
+        get
+        {
+            var engine = (TranscriptionSettingsStore.Load().Engine ?? "auto").Trim().ToLowerInvariant();
+            return Engines.Contains(engine) ? engine : "auto";
+        }
+    }
+
+    /// <summary>True once a model has loaded in this process, after which the engine cannot change until relaunch.</summary>
+    public static bool EngineIsFixed => RuntimeOptions.LoadedLibrary is not null;
+
+    /// <summary>
+    /// The engine a load is expected to end up on, from what is on disk and
+    /// the preference — the best guess available before a factory exists.
+    /// "CUDA", "Vulkan" or "CPU". <see cref="LoadedRuntimeLabel"/> is the
+    /// real answer once a model has loaded.
+    /// </summary>
+    public static string PredictEngine(GpuStatus status)
+    {
+        var preference = EnginePreference;
+        if ((preference is "auto" or "cuda") && status.CudaReady) return "CUDA";
+        if ((preference is "auto" or "vulkan") && status.VulkanReady) return "Vulkan";
+        return "CPU";
+    }
+
     // ------------------------------------------------------------- the GPU
 
     /// <summary>
@@ -317,13 +394,23 @@ public static class WhisperRuntime
 
     /// <summary>Whether this machine will actually decode on the GPU, and if not, why not.</summary>
     public readonly record struct GpuStatus(bool HasNvidiaDriver, bool HasCudaBackend,
-                                            IReadOnlyList<string> Missing, string? LibrariesFoundIn)
+                                            IReadOnlyList<string> Missing, string? LibrariesFoundIn,
+                                            bool HasVulkanBackend = false, bool HasVulkanLoader = false)
     {
         /// <summary>Everything is in place; the CUDA backend should load.</summary>
         public bool CudaReady => HasNvidiaDriver && HasCudaBackend && Missing.Count == 0;
 
         /// <summary>An NVIDIA card and a CUDA build, held back only by the missing libraries.</summary>
         public bool CudaFixable => HasNvidiaDriver && HasCudaBackend && Missing.Count > 0;
+
+        /// <summary>
+        /// This build carries the Vulkan engine and Windows has a Vulkan
+        /// loader, which every current NVIDIA, Intel and AMD display driver
+        /// installs. Not a promise the device is any good — a driver can
+        /// expose Vulkan and still run whisper badly — but the engine will
+        /// load and run on the GPU, which is what the status line predicts.
+        /// </summary>
+        public bool VulkanReady => HasVulkanBackend && HasVulkanLoader;
     }
 
     /// <summary>
@@ -345,8 +432,16 @@ public static class WhisperRuntime
             // below — the driver never installs those.
             var driver = File.Exists(Path.Combine(Environment.SystemDirectory, "nvcuda.dll"));
 
+            // vulkan-1.dll is the Khronos loader every Vulkan-capable display
+            // driver installs into System32 — NVIDIA, Intel and AMD alike.
+            var vulkanLoader = File.Exists(Path.Combine(Environment.SystemDirectory, "vulkan-1.dll"));
+            var vulkanBackend = VulkanBackendFolder() is not null;
+
             var backend = CudaBackendFolder();
-            if (backend is null) return new GpuStatus(driver, false, Array.Empty<string>(), null);
+            if (backend is null)
+            {
+                return new GpuStatus(driver, false, Array.Empty<string>(), null, vulkanBackend, vulkanLoader);
+            }
 
             string? foundIn = null;
             var missing = new List<string>();
@@ -357,7 +452,7 @@ public static class WhisperRuntime
                 else foundIn ??= found;
             }
 
-            return new GpuStatus(driver, true, missing, foundIn);
+            return new GpuStatus(driver, true, missing, foundIn, vulkanBackend, vulkanLoader);
         }
         catch (Exception)
         {
@@ -367,52 +462,113 @@ public static class WhisperRuntime
         }
     }
 
-    /// <summary>The sentence to show an operator, or null when nothing needs saying.</summary>
+    /// <summary>
+    /// What to tell an operator whose recognition has ended up on the CPU
+    /// although this machine has a GPU it could have used. Null when there is
+    /// nothing to fix: the CPU was the only option, or it was asked for.
+    /// Written for the moment after the engine has actually loaded, so it
+    /// speaks of what <em>is</em> running; <see cref="GpuHint"/> is the
+    /// forecast for the setup screen.
+    /// </summary>
     public static string? GpuAdvice(GpuStatus status)
     {
-        if (!status.CudaFixable) return null;
+        if (status.CudaFixable)
+        {
+            return "Speech recognition is running on the CPU on this PC — roughly five times slower than " +
+                   "the GPU, so the live transcript lags further behind the room. The NVIDIA card is " +
+                   "there and this build carries the CUDA engine, but the CUDA 12 libraries it needs " +
+                   "are not on this machine (" + string.Join(", ", status.Missing) + "). Install the " +
+                   "NVIDIA CUDA 12 runtime, or put those files in " + CudaFolder +
+                   " — Settings can point that somewhere else if this drive is short of room." +
+                   (status.VulkanReady
+                       ? " Until then, Settings ▸ Speech recognition ▸ Engine ▸ Vulkan runs on the same " +
+                         "card with no extra files."
+                       : "");
+        }
 
-        return "Speech recognition will run on the CPU on this PC — roughly five times slower than " +
-               "the GPU, so the live transcript lags further behind the room. The NVIDIA card is " +
-               "there and this build carries the CUDA engine, but the CUDA 12 libraries it needs " +
-               "are not on this machine (" + string.Join(", ", status.Missing) + "). Install the " +
-               "NVIDIA CUDA 12 runtime, or put those files in " + CudaFolder +
-               " — Settings can point that somewhere else if this drive is short of room.";
+        if (status.VulkanReady && EnginePreference != "cpu")
+        {
+            return "Speech recognition is running on the CPU, although this PC has a GPU the Vulkan engine " +
+                   "could use. With the GPU driver up to date, Settings ▸ Speech recognition ▸ Engine can " +
+                   "force Vulkan; the change takes effect at the next launch.";
+        }
+
+        return null;
     }
 
     /// <summary>
-    /// The same news in one line, for the setup screen — which has to fit a
-    /// roster, a device check and a level meter, and where the fix is a
-    /// click away under Settings anyway.
+    /// One sentence for the setup screen about where recognition is about to
+    /// run, or null when it is the fastest engine this PC has. Only the slower
+    /// cases are named — an engine about to do its job properly does not
+    /// need announcing.
     /// </summary>
-    public static string? GpuHint(GpuStatus status) => status.CudaFixable
-        ? "This PC will transcribe on the CPU — around five times slower than the GPU, so the live " +
-          "transcript falls further behind. Settings ▸ Speech recognition says how to change that."
-        : null;
+    public static string? GpuHint(GpuStatus status)
+    {
+        return PredictEngine(status) switch
+        {
+            "CUDA" => null,
+            "Vulkan" when status.CudaFixable =>
+                "This PC will transcribe on its GPU through Vulkan. The NVIDIA CUDA engine is faster " +
+                "still — Settings ▸ Speech recognition says how to enable it.",
+            "Vulkan" => null,
+            _ when status.CudaFixable || status.VulkanReady =>
+                "This PC will transcribe on the CPU — several times slower than its GPU, so the live " +
+                "transcript falls further behind. Settings ▸ Speech recognition says how to change that.",
+            _ => null,
+        };
+    }
 
-    /// <summary>
-    /// The same picture as <see cref="GpuAdvice"/> but stated for every case,
-    /// including the good ones — what the settings screen shows, where the
-    /// operator came to find out how their machine is set up rather than to
-    /// be warned about it.
-    /// </summary>
+    /// <summary>The Settings screen's engine paragraph: what will run, and why.</summary>
     public static string GpuSummary(GpuStatus status)
     {
-        if (GpuAdvice(status) is { } advice) return advice;
+        var preference = EnginePreference;
+        var predicted = PredictEngine(status);
+        var fixedNote = EngineIsFixed &&
+                        !string.Equals(LoadedRuntimeLabel, predicted, StringComparison.OrdinalIgnoreCase)
+            ? " A meeting in this session already loaded the " + LoadedRuntimeLabel +
+              " engine; the change applies from the next launch."
+            : "";
 
-        if (!status.HasNvidiaDriver)
+        if (predicted == "CUDA")
         {
-            return "No NVIDIA GPU on this PC, so speech is recognised on the CPU. That works — it is " +
+            return "GPU ready — the CUDA libraries were found in " + (status.LibrariesFoundIn ?? "the search path") +
+                   ", so speech is recognised on the NVIDIA GPU with CUDA, the fastest engine this build has." +
+                   fixedNote;
+        }
+
+        if (predicted == "Vulkan")
+        {
+            return (status.CudaFixable
+                       ? "Speech is recognised on the GPU through Vulkan. The NVIDIA card could run the faster " +
+                         "CUDA engine, but the CUDA 12 libraries are not on this machine (" +
+                         string.Join(", ", status.Missing) + "): install the NVIDIA CUDA 12 runtime, or put " +
+                         "those files in " + CudaFolder + "."
+                       : status.HasNvidiaDriver
+                           ? "Speech is recognised on the NVIDIA GPU through Vulkan, as the engine setting asks."
+                           : "Speech is recognised on this PC's GPU through Vulkan — the engine for Intel Arc / Xe " +
+                             "and AMD graphics, which needs only the display driver already installed.")
+                   + fixedNote;
+        }
+
+        if (preference == "cpu")
+        {
+            return "Speech is recognised on the CPU because the engine setting says so. That works on every PC " +
+                   "and is simply slower, so the live transcript runs further behind the room." + fixedNote;
+        }
+
+        if (!status.HasCudaBackend && !status.HasVulkanBackend)
+        {
+            return "This build has no GPU engine, so speech is recognised on the CPU.";
+        }
+
+        if (!status.HasNvidiaDriver && !status.VulkanReady)
+        {
+            return "No usable GPU on this PC, so speech is recognised on the CPU. That works — it is " +
                    "simply slower, so the live transcript runs further behind the room on a long meeting.";
         }
 
-        if (!status.HasCudaBackend)
-        {
-            return "This build has no CUDA engine, so speech is recognised on the CPU.";
-        }
-
-        return "GPU ready — the CUDA libraries were found in " + (status.LibrariesFoundIn ?? "the search path") +
-               ", so speech is recognised on the NVIDIA GPU.";
+        return "Speech is recognised on the CPU: no GPU engine matches this PC and the engine setting." +
+               fixedNote;
     }
 
     /// <summary>
@@ -446,6 +602,14 @@ public static class WhisperRuntime
         if (RuntimeRoot is null) return null;
         var folder = Path.Combine(RuntimeRoot, "runtimes", "cuda", "win-x64");
         return File.Exists(Path.Combine(folder, "whisper.dll")) ? folder : null;
+    }
+
+    /// <summary>The Vulkan runtime folder inside that root, or null when this build has no Vulkan engine.</summary>
+    private static string? VulkanBackendFolder()
+    {
+        if (RuntimeRoot is null) return null;
+        var folder = Path.Combine(RuntimeRoot, "runtimes", "vulkan", "win-x64");
+        return File.Exists(Path.Combine(folder, "ggml-vulkan-whisper.dll")) ? folder : null;
     }
 
     /// <summary>
