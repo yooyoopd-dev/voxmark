@@ -362,6 +362,10 @@ public sealed class RecordingWindow : ShellWindow
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _tileGrid,
         };
+        _gridScroller = gridScroller;
+        // The transcript strip takes whatever height the grid leaves empty:
+        // one or two rows of tiles leave room the strip can use, three fill it.
+        gridScroller.SizeChanged += (_, _) => FitTranscriptToGrid();
 
         var top = new StackPanel();
         top.Children.Add(_confirmBanner);
@@ -495,6 +499,28 @@ public sealed class RecordingWindow : ShellWindow
             field), new Thickness(10, 6, 10, 6), 6);
     }
 
+    private ScrollViewer? _gridScroller;
+
+    /// <summary>
+    /// Give the transcript strip the grid area's empty space. The sum of the
+    /// grid area and the strip's growth over its minimum is fixed by the rest
+    /// of the screen, so solving against that sum cannot oscillate: growing
+    /// the strip shrinks the grid area by exactly the same amount.
+    /// </summary>
+    private void FitTranscriptToGrid()
+    {
+        if (_transcriptView is null || _gridScroller is null || _gridScroller.ActualHeight <= 0) return;
+
+        var count = _session.Speakers.Count;
+        var columns = SpeakerTile.ColumnsFor(count);
+        var rows = Math.Max(1, (count + columns - 1) / columns);
+        var tile = SpeakerTile.HeightFor(SpeakerTile.DensityFor(count), _compactLayout);
+        var gridNeeds = rows * (tile + 8) + 12;
+
+        var pool = _gridScroller.ActualHeight + (_transcriptView.ActualHeight - TranscriptView.StripHeight);
+        _transcriptView.SetFitHeight(TranscriptView.StripHeight + Math.Max(0, pool - gridNeeds));
+    }
+
     private void BuildTiles()
     {
         var count = _session.Speakers.Count;
@@ -526,6 +552,9 @@ public sealed class RecordingWindow : ShellWindow
             : "Keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.";
 
         _toast.SetRoster(_session.Speakers);
+
+        // A roster change can add or drop a row of tiles.
+        Dispatcher.InvokeAsync(FitTranscriptToGrid, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     // ------------------------------------------------------------- recording

@@ -12,7 +12,7 @@
     <!-- What Settings and the Markdown "tool:" field report. CI overrides it
          with -p:Version from the release tag, so a published exe always names
          the tag it was cut from; a local or main-branch build keeps this. -->
-    <Version>1.4.1</Version>
+    <Version>1.4.2</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
     <!-- Sets the process's ANSI code page to UTF-8, which the whisper
          model path depends on — see the comment inside the manifest. Copied

@@ -480,7 +480,16 @@ The grid needs `rows × (tile + 8) + 12`, worst case 3 rows of 54px compact
 tiles = 198 — 3px spare. A compact tile is two text rows (name, then sub
 title and talk time), and the open mark's start replaces the sub title while
 the mark is open, because there is no height for the middle row a full tile
-has. Without transcription the strip is absent and the 72px floor holds. Two limits that follow from this and are *not* bugs:
+has. Without transcription the strip is absent and the 72px floor holds.
+
+That 197px is the strip's **minimum**, sized for the three-row worst case.
+With one or two rows of tiles the grid leaves height empty, and
+`RecordingWindow.FitTranscriptToGrid` hands it to the strip
+(`TranscriptView.SetFitHeight`) on every resize and roster change, so the
+transcript grows instead of the screen showing a gap under the tiles. It
+solves against grid area + strip growth, a sum the rest of the screen fixes,
+so the two cannot chase each other. A notice banner shrinks the strip back
+toward the minimum before the grid has to scroll. Two limits that follow from this and are *not* bugs:
 
 - **A visible notice banner costs ~60px**, so the densest rosters scroll while
   one is up. A notice is exceptional and the scrollbar is there for it; "no
