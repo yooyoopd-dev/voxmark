@@ -401,7 +401,7 @@ public sealed class RecordingWindow : ShellWindow
     /// operator is watching, and it only ever appeared once the pointer was
     /// already on the thing it described — which is the moment it is least
     /// useful. Standing text says the same thing without waiting to be
-    /// hovered, and costs no height: the column beside a 136px strip has
+    /// hovered, and costs no height: the column beside a 197px strip has
     /// room for a second line several times over.
     /// </summary>
     private UIElement BuildTranscriptRow()

@@ -10,13 +10,13 @@ using MeetingRecorder.Views;
 namespace MeetingRecorder.Controls;
 
 /// <summary>
-/// The live transcript strip on the recording screen: six lines of
+/// The live transcript strip on the recording screen: nine lines of
 /// recognised speech, with everything said earlier scrollable above them —
-/// or, at the operator's choice, a strip twice that tall.
+/// or, at the operator's choice, a taller one of fourteen.
 ///
 /// The operator's job is marking, not reading — the strip is there to confirm
 /// that recognition is alive and roughly on time, and a much taller one would
-/// compete with the speaker grid for both space and attention. So six lines
+/// compete with the speaker grid for both space and attention. So nine lines
 /// is the default. But an operator who corrects the transcript as the meeting
 /// goes needs to see more than the last few seconds of it, and the ⤢ toggle
 /// trades grid height for strip height for exactly that case; the grid then
@@ -45,13 +45,14 @@ namespace MeetingRecorder.Controls;
 public sealed class TranscriptView : Border
 {
     /// <summary>
-    /// Enough to show six lines; the rest scrolls. Worked from the parts
+    /// Enough to show nine lines; the rest scrolls. Worked from the parts
     /// rather than eyeballed: 1px border top and bottom, the 5px padding the
-    /// line stack carries each side, and six rows of a 13pt line (17.3px) plus
-    /// the 3px gap under it — 133.8, rounded up for the same couple of pixels
-    /// of slack the old five-line 116 had.
+    /// line stack carries each side, and nine rows of a 13pt line (17.3px)
+    /// plus the 3px gap under it — 194.7, rounded up for a couple of pixels
+    /// of slack. The three lines over the old six were paid for by the
+    /// compact speaker tiles, see <see cref="SpeakerTile.HeightFor"/>.
     /// </summary>
-    public const double StripHeight = 136;
+    public const double StripHeight = 197;
 
     /// <summary>
     /// The taller size: fourteen lines by the same arithmetic. Paid for out
@@ -218,7 +219,7 @@ public sealed class TranscriptView : Border
         Height = expanded ? ExpandedStripHeight : StripHeight;
         _resize.Content = expanded ? "⤡" : "⤢";
         _resize.ToolTip = expanded
-            ? "Back to the six-line strip"
+            ? "Back to the nine-line strip"
             : "Taller strip — the speaker grid scrolls to make room";
         if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
         if (announce) ExpandedChanged?.Invoke(expanded);

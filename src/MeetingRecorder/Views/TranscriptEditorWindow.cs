@@ -13,7 +13,7 @@ namespace MeetingRecorder.Views;
 /// The whole transcript of a finished meeting, line by line, for review
 /// before the Markdown is handed on. Opened from the export screen.
 ///
-/// The live strip is for the moment — six lines, one correction at a time,
+/// The live strip is for the moment — nine lines, one correction at a time,
 /// between marks. This is for afterwards, when the operator has the room and
 /// the meeting is still fresh: every line with the speaker it will be filed
 /// under, a search box to find the place somebody misspoke, and
