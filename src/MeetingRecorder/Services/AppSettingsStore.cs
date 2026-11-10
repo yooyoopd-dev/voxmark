@@ -41,6 +41,15 @@ public static class AppSettingsStore
 
         /// <summary>The MP3 bitrate a new setup begins with.</summary>
         public int Mp3BitrateKbps { get; set; } = 128;
+
+        /// <summary>
+        /// Whether the live transcript strip opens at its taller size. An
+        /// operator who reads the transcript as much as they mark wants the
+        /// room every meeting, not a click into every meeting; one who only
+        /// glances at it wants the tiles. Remembered here because it is a
+        /// habit of the person at this PC, not a property of a meeting.
+        /// </summary>
+        public bool TranscriptStripExpanded { get; set; }
     }
 
     private static string Path => System.IO.Path.Combine(

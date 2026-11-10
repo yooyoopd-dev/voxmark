@@ -12,7 +12,7 @@
     <!-- What Settings and the Markdown "tool:" field report. CI overrides it
          with -p:Version from the release tag, so a published exe always names
          the tag it was cut from; a local or main-branch build keeps this. -->
-    <Version>1.3.4</Version>
+    <Version>1.4.0</Version>
     <ApplicationIcon>icon.ico</ApplicationIcon>
     <!-- Sets the process's ANSI code page to UTF-8, which the whisper
          model path depends on — see the comment inside the manifest. Copied
@@ -31,7 +31,7 @@
     <InvariantGlobalization>false</InvariantGlobalization>
 
     <!-- Two editions from one source tree — see CLAUDE.md "Editions".
-           Full  (default)  speech recognition, whisper.cpp + CUDA, ~250 MB
+           Full  (default)  speech recognition, whisper.cpp + CUDA + Vulkan, ~250 MB
            Lite             today's recorder, no speech recognition, ~70 MB
          Anything but "Lite" means Full, so a typo can never silently ship a
          build with the feature quietly missing. -->
@@ -89,6 +89,12 @@
          never load. CUDA is tried first and falls back to the CPU runtime
          above on a machine with no usable NVIDIA device. -->
     <PackageReference Include="Whisper.net.Runtime.Cuda.Windows" Version="1.8.1" />
+    <!-- Vulkan needs nothing but a display driver, so it is the GPU path for
+         every machine the CUDA one cannot serve: an NVIDIA laptop without
+         the 700 MB CUDA runtime, and the Intel Arc / Xe graphics in a Core
+         Ultra. About 21 MB of DLL, extracted to runtimes/vulkan/win-x64.
+         Tried after CUDA and before the CPU — see WhisperRuntime.UseEngine. -->
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.8.1" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(IsLiteEdition)' == 'true'">

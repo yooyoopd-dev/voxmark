@@ -39,6 +39,9 @@ public sealed class SettingsWindow : ShellWindow
     private readonly TextBlock _gpuStatus;
     private readonly TextBlock _cudaPath;
     private readonly Dropdown _language;
+    private readonly Dropdown _engine;
+    private readonly Dropdown _accuracy;
+    private readonly TextBox _vocabulary;
 #endif
 
     public SettingsWindow() : base("VoxMark — settings", 820, 760)
@@ -114,6 +117,54 @@ public sealed class SettingsWindow : ShellWindow
         };
         _language.Select(speech.Language);
         _language.DisplayText = LanguageLabel(speech.Language);
+
+        _engine = new Dropdown("ChipButton") { MinHeight = 26, PopupMinWidth = 220 };
+        _engine.SetItems(new (string, object)[]
+        {
+            ("Auto — CUDA, then Vulkan, then CPU", "auto"),
+            ("NVIDIA CUDA", "cuda"),
+            ("Vulkan (any GPU)", "vulkan"),
+            ("CPU only", "cpu"),
+        });
+        _engine.SelectionChanged += value =>
+        {
+            if (value is not string engine) return;
+            Speech(s => s.Engine = engine);
+            // The loader hears the order on the next Probe; the status line
+            // below says whether that is now or at the next launch.
+            WhisperRuntime.UseEngine(engine);
+            RefreshModel();
+        };
+        _engine.Select(WhisperRuntime.EnginePreference);
+
+        _accuracy = new Dropdown("ChipButton") { MinHeight = 26, PopupMinWidth = 220 };
+        _accuracy.SetItems(new (string, object)[]
+        {
+            ("Auto — best on a GPU, fast on a CPU", "auto"),
+            ("Best — beam search, ~2× the work", "best"),
+            ("Fast — greedy decoding", "fast"),
+        });
+        _accuracy.SelectionChanged += value =>
+        {
+            if (value is string accuracy) Speech(s => s.Accuracy = accuracy);
+        };
+        _accuracy.Select(string.IsNullOrWhiteSpace(speech.Accuracy) ? "auto" : speech.Accuracy.Trim().ToLowerInvariant());
+
+        _vocabulary = new TextBox
+        {
+            Text = speech.Vocabulary,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            FontSize = 12.5,
+            MinHeight = 64,
+            MaxHeight = 140,
+        };
+        // Saved when the field is left rather than per keystroke: a settings
+        // write per character is wasteful, and leaving the box is the moment
+        // the operator is done with it. Closing the window counts as leaving.
+        _vocabulary.LostFocus += (_, _) => SaveVocabulary();
+        Closing += (_, _) => SaveVocabulary();
 #endif
 
         _offset.Select(settings.MarkStartOffsetSeconds);
@@ -259,6 +310,27 @@ public sealed class SettingsWindow : ShellWindow
             Ui.Filler(),
             _language);
 
+        var engineRow = Ui.Columns(1,
+            Ui.Text("Engine", 13.5, Palette.TextBrush),
+            Ui.Filler(),
+            _engine);
+
+        var accuracyRow = Ui.Columns(1,
+            Ui.Text("Accuracy", 13.5, Palette.TextBrush),
+            Ui.Filler(),
+            _accuracy);
+
+        var vocabularyHint = Ui.Wrap(
+            "Names, products, abbreviations and jargon the recogniser should expect — one per line or " +
+            "comma-separated, about a hundred words at most. Whisper is told it has already heard them, so " +
+            "it prefers these spellings over sound-alikes. Changes apply from the next meeting.",
+            11.5, Palette.TextMutedBrush);
+        vocabularyHint.Margin = new Thickness(0, 6, 0, 0);
+        var vocabularyRow = Ui.Vertical(6,
+            Ui.Text("Vocabulary", 13.5, Palette.TextBrush),
+            _vocabulary,
+            vocabularyHint);
+
         var cudaBrowse = Ui.MakeButton("Browse…", null, "ChipButton", (_, _) => BrowseForCudaFolder());
         cudaBrowse.Margin = new Thickness(10, 0, 0, 0);
         cudaBrowse.VerticalAlignment = VerticalAlignment.Center;
@@ -274,8 +346,13 @@ public sealed class SettingsWindow : ShellWindow
 
         var note = Ui.Wrap(
             "The model is a file you supply — VoxMark never downloads one and makes no network calls. " +
-            "Drop a ggml .bin into " + WhisperRuntime.ModelsFolder + " and it is found automatically. " +
+            "Drop a ggml .bin into " + WhisperRuntime.ModelsFolder + " and it is found automatically; " +
+            "a large-v3-turbo or medium model gives the best words, a q5 or q8 quantised build of it runs " +
+            "faster for almost the same words. " +
             "Whether a given meeting transcribes is still the toggle on the setup screen. " +
+            "Engine: CUDA is the fastest and needs NVIDIA's CUDA 12 runtime; Vulkan runs on any current " +
+            "NVIDIA, Intel or AMD GPU with just its display driver; the CPU always works. An engine chosen " +
+            "after a meeting has transcribed in this session applies from the next launch. " +
             "The CUDA folder is only needed when NVIDIA's runtime is not installed on this PC: put " +
             "cudart64_12.dll, cublas64_12.dll and cublasLt64_12.dll in it and speech runs on the GPU. " +
             "They come to about 700 MB, so any drive will do — VoxMark only adds the folder to its " +
@@ -284,7 +361,9 @@ public sealed class SettingsWindow : ShellWindow
         note.Margin = new Thickness(0, 10, 0, 0);
 
         return Card(Ui.Vertical(0, Pad(modelRow), Pad(_modelStatus, 4), Pad(_gpuStatus, 4),
-                                Ui.Rule(), Pad(languageRow), Ui.Rule(), Pad(cudaRow), note));
+                                Ui.Rule(), Pad(languageRow), Ui.Rule(), Pad(engineRow), Ui.Rule(),
+                                Pad(accuracyRow), Ui.Rule(), Pad(vocabularyRow, 10), Ui.Rule(),
+                                Pad(cudaRow), note));
     }
 #endif
 
@@ -481,11 +560,19 @@ public sealed class SettingsWindow : ShellWindow
         // fallback costs about a five-fold slowdown that the operator can
         // often fix once and never think about again.
         var gpu = WhisperRuntime.InspectGpu();
-        var slow = WhisperRuntime.GpuAdvice(gpu);
-        if (slow is not null) WhisperRuntime.EnsureCudaFolder();
+        if (gpu.CudaFixable) WhisperRuntime.EnsureCudaFolder();
+
+        // Amber only when this PC is about to run slower than it could:
+        // a CPU forecast with a GPU engine available, or Vulkan standing in
+        // for a CUDA the operator could install. A CPU chosen on purpose is
+        // the operator's business and is not nagged about.
+        var predicted = WhisperRuntime.PredictEngine(gpu);
+        var slower = predicted == "CPU"
+            ? WhisperRuntime.EnginePreference != "cpu" && (gpu.CudaFixable || gpu.VulkanReady)
+            : predicted == "Vulkan" && gpu.CudaFixable;
 
         _gpuStatus.Text = WhisperRuntime.GpuSummary(gpu);
-        _gpuStatus.Foreground = slow is null ? Palette.TextMutedBrush : Palette.WarnBrush;
+        _gpuStatus.Foreground = slower ? Palette.WarnBrush : Palette.TextMutedBrush;
 
         _cudaPath.Text = WhisperRuntime.CudaFolder + (WhisperRuntime.CudaFolderIsCustom ? "" : "  (default)");
         _cudaPath.Foreground = Directory.Exists(WhisperRuntime.CudaFolder)
@@ -558,6 +645,13 @@ public sealed class SettingsWindow : ShellWindow
         "de" => "German",
         _ => code,
     };
+
+    private void SaveVocabulary()
+    {
+        var text = _vocabulary.Text ?? "";
+        if (text == TranscriptionSettingsStore.Load().Vocabulary) return;
+        Speech(s => s.Vocabulary = text);
+    }
 
     /// <summary>Read-modify-write, so one field never clears the others.</summary>
     private static void Speech(Action<TranscriptionSettingsStore.Settings> change)

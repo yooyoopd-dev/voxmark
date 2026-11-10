@@ -1,7 +1,9 @@
+using System.Text.RegularExpressions;
 using MeetingRecorder.Models;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Whisper.net;
+using Whisper.net.SamplingStrategy;
 
 namespace MeetingRecorder.Services;
 
@@ -35,12 +37,63 @@ public sealed class TranscriptionService : IDisposable
     /// <summary>
     /// Below this there is not enough context for a decent decode; above it,
     /// the operator is watching a blank strip for too long. Six seconds is
-    /// the compromise the live view is tuned around.
+    /// the compromise the live view is tuned around — on a GPU.
     /// </summary>
-    private const double MinChunkSeconds = 6.0;
+    private const double GpuMinChunkSeconds = 6.0;
 
     /// <summary>Whisper's window is 30 s; staying well under it keeps latency honest.</summary>
-    private const double MaxChunkSeconds = 18.0;
+    private const double GpuMaxChunkSeconds = 18.0;
+
+    /// <summary>
+    /// The CPU's chunk lengths. whisper.cpp pads every chunk to its 30 s
+    /// window before the encoder sees it, so the encoder — the expensive
+    /// half on a CPU — costs the same for six seconds of speech as for
+    /// twenty. Longer chunks therefore mean fewer encoder passes per minute
+    /// of meeting, which is the difference between a CPU that keeps up and
+    /// one that drops audio. The price is latency, which the CPU strip was
+    /// already paying; a marked handover still cuts early, so attribution
+    /// does not get coarser with it.
+    /// </summary>
+    private const double CpuMinChunkSeconds = 10.0;
+
+    private const double CpuMaxChunkSeconds = 22.0;
+
+    /// <summary>Set by <see cref="Begin"/> once the engine is known; the GPU values until then.</summary>
+    private double _minChunkSeconds = GpuMinChunkSeconds;
+
+    private double _maxChunkSeconds = GpuMaxChunkSeconds;
+
+    /// <summary>
+    /// A chunk whose loudest sample is under this (−60 dBFS) is a muted
+    /// input or digital silence, not a quiet room — a room microphone's
+    /// noise floor alone sits well above it. Decoding it would cost a full
+    /// encoder pass and, worse, is exactly where whisper invents text: a
+    /// silent window comes back as "Thank you for watching" or a repeated
+    /// phrase from the prompt. It is skipped, and the skip is counted.
+    /// </summary>
+    private const float SilencePeak = 0.001f;
+
+    /// <summary>
+    /// A segment whose window whisper itself rated this likely to hold no
+    /// speech, and whose words it was this unsure of, is a hallucination far
+    /// more often than a quiet remark. Both thresholds have to agree before a
+    /// segment is dropped: confident words in a window rated as silence are
+    /// usually real — a short interjection after a pause.
+    /// </summary>
+    private const double NoSpeechProbabilityFloor = 0.75;
+
+    private const double HallucinationProbabilityCeiling = 0.5;
+
+    /// <summary>
+    /// The non-speech annotations whisper emits for silence and noise —
+    /// <c>[BLANK_AUDIO]</c>, <c>(music)</c>, <c>(웃음)</c>, <c>♪</c> and the
+    /// like. A line that is nothing but these carries no words for the
+    /// Markdown and is dropped; one with words around them is kept whole,
+    /// annotation included, because stripping it would be editing speech.
+    /// </summary>
+    private static readonly Regex NonSpeechOnly = new(
+        @"^(\s*(\[[^\]]*\]|\([^\)]*\)|（[^）]*）|\*[^\*]*\*|♪+|[\.\-–—…·,!?]+))*\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// The shortest chunk a marked handover is allowed to produce. Below this
@@ -130,6 +183,12 @@ public sealed class TranscriptionService : IDisposable
     /// <summary>Seconds of audio dropped because recognition could not keep up. Never hidden.</summary>
     public double DroppedSeconds { get; private set; }
 
+    /// <summary>Seconds of chunks not decoded because they held no signal at all — a muted input, not a quiet room.</summary>
+    public double SkippedSilentSeconds { get; private set; }
+
+    /// <summary>Recognised lines withheld as non-speech annotations or likely hallucinations.</summary>
+    public int SuppressedSegments { get; private set; }
+
     /// <summary>True once the worker is running and accepting audio.</summary>
     public bool IsRunning => _worker is not null && !_faulted;
 
@@ -198,9 +257,28 @@ public sealed class TranscriptionService : IDisposable
                              @"C:\VoxMark\Models and choose it again in Settings.");
             }
 
+            var tuning = TranscriptionSettingsStore.Load();
+            var forecast = WhisperRuntime.InspectGpu();
+
             // Building the factory is what actually loads the native library,
             // so the runtime label is only meaningful after this line.
-            _factory = WhisperFactory.FromPath(nativePath, new WhisperFactoryOptions { UseGpu = true });
+            //
+            // Flash attention is a free 10–30 % on CUDA with identical output.
+            // It is switched on only when CUDA is what is about to load: the
+            // Vulkan engine in this build may hand the fused attention op back
+            // to the CPU, which would make the GPU path slower than no flash
+            // attention at all, and on the CPU the gain is too small to be
+            // worth a second code path. Predicted from what is on disk — the
+            // option has to be decided before the load that would confirm it.
+            _factory = WhisperFactory.FromPath(nativePath, new WhisperFactoryOptions
+            {
+                UseGpu = true,
+                UseFlashAttention = WhisperRuntime.PredictEngine(forecast) == "CUDA",
+            });
+
+            var onGpu = !string.Equals(WhisperRuntime.LoadedRuntimeLabel, "CPU", StringComparison.OrdinalIgnoreCase);
+            _minChunkSeconds = onGpu ? GpuMinChunkSeconds : CpuMinChunkSeconds;
+            _maxChunkSeconds = onGpu ? GpuMaxChunkSeconds : CpuMaxChunkSeconds;
 
             var builder = _factory.CreateBuilder()
                 // Leave one core for the recorder and the UI; whisper will
@@ -210,6 +288,11 @@ public sealed class TranscriptionService : IDisposable
                 // and these strings outlive the callback — they go into the
                 // journal and the UI.
                 .WithoutStringPool()
+                // Per-token probabilities, so a segment carries whisper's own
+                // confidence into the journal and the hallucination filter
+                // has something to read. Cheap: a softmax the decoder has
+                // already computed.
+                .WithProbabilities()
                 .WithSegmentEventHandler(OnSegment);
 
             builder = string.Equals(_options.TranscriptionLanguage, "auto", StringComparison.OrdinalIgnoreCase)
@@ -218,11 +301,37 @@ public sealed class TranscriptionService : IDisposable
                     ? "en"
                     : _options.TranscriptionLanguage);
 
+            // The vocabulary becomes whisper's initial prompt: text the
+            // decoder is told it has "already heard", which biases every
+            // chunk towards those spellings. It is the one lever that fixes a
+            // name or an abbreviation the model keeps mangling without a
+            // different model, and it costs nothing per chunk.
+            var prompt = BuildPrompt(tuning.Vocabulary);
+            if (prompt.Length > 0) builder = builder.WithPrompt(prompt);
+
+            // Beam search finds the better transcript — OpenAI's own default
+            // is a beam of five — at about twice the decode cost. Auto spends
+            // that on a GPU, where the decode is a fraction of the chunk's
+            // length anyway, and saves it on a CPU that is already behind.
+            var beam = (tuning.Accuracy ?? "auto").Trim().ToLowerInvariant() switch
+            {
+                "best" => true,
+                "fast" => false,
+                _ => onGpu,
+            };
+            // The strategy builders come back typed as the interface in
+            // 1.8.1; the beam size lives on the concrete class.
+            builder = beam
+                ? ((BeamSearchSamplingStrategyBuilder)builder.WithBeamSearchSamplingStrategy()).WithBeamSize(5).ParentBuilder
+                : builder.WithGreedySamplingStrategy().ParentBuilder;
+
             _processor = builder.Build();
 
             Description = WhisperRuntime.ShortModelName(model.Name) + " / " +
                           (_options.TranscriptionLanguage.Length > 0 ? _options.TranscriptionLanguage : "en") + " / " +
-                          WhisperRuntime.LoadedRuntimeLabel;
+                          WhisperRuntime.LoadedRuntimeLabel +
+                          (beam ? " / beam 5" : "") +
+                          (prompt.Length > 0 ? " / vocabulary" : "");
 
             // The factory is built, so the loader has run and the answer is
             // real rather than predicted — the one moment this can be known
@@ -266,7 +375,12 @@ public sealed class TranscriptionService : IDisposable
                           " · CUDA engine in this build: " + (gpu.HasCudaBackend ? "yes" : "no") +
                           " · CUDA libraries: " + (gpu.Missing.Count == 0
                               ? "found in " + (gpu.LibrariesFoundIn ?? "the search path")
-                              : "missing " + string.Join(", ", gpu.Missing)));
+                              : "missing " + string.Join(", ", gpu.Missing)) +
+                          " · Vulkan engine: " + (gpu.HasVulkanBackend ? "yes" : "no") +
+                          " · Vulkan loader: " + (gpu.HasVulkanLoader ? "yes" : "no") +
+                          " · engine setting: " + WhisperRuntime.EnginePreference + "\n" +
+                          "Decode: " + Description + " · chunks " + _minChunkSeconds.ToString("0") + "–" +
+                          _maxChunkSeconds.ToString("0") + " s");
 
             if (!string.Equals(WhisperRuntime.LoadedRuntimeLabel, "CPU", StringComparison.OrdinalIgnoreCase)) return;
 
@@ -496,7 +610,7 @@ public sealed class TranscriptionService : IDisposable
             chunkStartSeconds = PendingStartSeconds();
             if (_pendingSamples == 0) return null;
 
-            var minimum = (int)(MinChunkSeconds * _sourceSampleRate);
+            var minimum = (int)(_minChunkSeconds * _sourceSampleRate);
 
             // A marked handover is a better place to end a chunk than any
             // amount of extra audio, so it also decides when there is
@@ -505,7 +619,7 @@ public sealed class TranscriptionService : IDisposable
             var boundary = NextBoundary(chunkStartSeconds);
             if (!_stopping && boundary is null && _pendingSamples < minimum) return null;
 
-            var window = Math.Min(_pendingSamples, (int)(MaxChunkSeconds * _sourceSampleRate));
+            var window = Math.Min(_pendingSamples, (int)(_maxChunkSeconds * _sourceSampleRate));
             var chunk = new float[window];
             CopyPending(chunk, window);
 
@@ -567,7 +681,7 @@ public sealed class TranscriptionService : IDisposable
         if (_boundaries.Count == 0) return null;
 
         var offset = (int)((_boundaries[0] - chunkStartSeconds) * _sourceSampleRate);
-        if (offset > _pendingSamples || offset > (int)(MaxChunkSeconds * _sourceSampleRate)) return null;
+        if (offset > _pendingSamples || offset > (int)(_maxChunkSeconds * _sourceSampleRate)) return null;
 
         return offset;
     }
@@ -656,6 +770,12 @@ public sealed class TranscriptionService : IDisposable
     {
         if (_processor is null) return;
 
+        if (IsSilent(chunk))
+        {
+            SkippedSilentSeconds += chunk.Length / (double)_sourceSampleRate;
+            return;
+        }
+
         _chunkStartSeconds = chunkStartSeconds;
         try
         {
@@ -667,6 +787,50 @@ public sealed class TranscriptionService : IDisposable
             // meeting; say so once and carry on with the next.
             StatusChanged?.Invoke("A chunk could not be recognised (" + ex.Message + ") — still listening");
         }
+    }
+
+    /// <summary>Is there nothing in this chunk at all? See <see cref="SilencePeak"/>.</summary>
+    private static bool IsSilent(float[] chunk)
+    {
+        var peak = 0f;
+        foreach (var sample in chunk)
+        {
+            var magnitude = Math.Abs(sample);
+            if (magnitude > peak) peak = magnitude;
+            if (peak >= SilencePeak) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The operator's vocabulary as one prompt line. Terms may be separated
+    /// by newlines, commas or semicolons; they come out comma-joined, which
+    /// is the shape whisper's prompt handles best. Capped well inside the
+    /// decoder's prompt budget (half its 448-token context): whisper keeps
+    /// the <em>tail</em> of an over-long prompt, so the cap keeps the first
+    /// terms — the ones the operator typed first — in play rather than the
+    /// last.
+    /// </summary>
+    internal static string BuildPrompt(string? vocabulary)
+    {
+        if (string.IsNullOrWhiteSpace(vocabulary)) return "";
+
+        var terms = vocabulary
+            .Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => t.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (terms.Count == 0) return "";
+
+        const int maxChars = 600;
+        var prompt = new System.Text.StringBuilder();
+        foreach (var term in terms)
+        {
+            if (prompt.Length + term.Length + 2 > maxChars) break;
+            if (prompt.Length > 0) prompt.Append(", ");
+            prompt.Append(term);
+        }
+        return prompt.ToString();
     }
 
     /// <summary>
@@ -702,6 +866,19 @@ public sealed class TranscriptionService : IDisposable
     {
         var text = data.Text is { } raw ? raw.Trim() : "";
         if (text.Length == 0) return;
+
+        // Two kinds of line the recogniser produces that nobody said. The
+        // annotation-only line is certain; the low-confidence line in a
+        // window whisper itself rated as probably silent is the shape its
+        // hallucinations take. Neither is hidden: the count is on the strip
+        // and in the export, like dropped audio is.
+        if (NonSpeechOnly.IsMatch(text) ||
+            (data.NoSpeechProbability >= NoSpeechProbabilityFloor &&
+             data.Probability < HallucinationProbabilityCeiling))
+        {
+            SuppressedSegments++;
+            return;
+        }
 
         SegmentRecognised?.Invoke(new TranscriptSegment
         {

@@ -11,14 +11,19 @@ namespace MeetingRecorder.Controls;
 
 /// <summary>
 /// The live transcript strip on the recording screen: six lines of
-/// recognised speech, with everything said earlier scrollable above them.
+/// recognised speech, with everything said earlier scrollable above them —
+/// or, at the operator's choice, a strip twice that tall.
 ///
 /// The operator's job is marking, not reading — the strip is there to confirm
 /// that recognition is alive and roughly on time, and a much taller one would
-/// compete with the speaker grid for both space and attention. History stays
-/// reachable for the moment someone asks "what did they just say", and the
-/// view stops following the newest line as soon as the operator scrolls back,
-/// so reading is never yanked out from under them.
+/// compete with the speaker grid for both space and attention. So six lines
+/// is the default. But an operator who corrects the transcript as the meeting
+/// goes needs to see more than the last few seconds of it, and the ⤢ toggle
+/// trades grid height for strip height for exactly that case; the grid then
+/// scrolls, which is what a scrollable grid is for. The choice is remembered
+/// per PC. History stays reachable for the moment someone asks "what did
+/// they just say", and the view stops following the newest line as soon as
+/// the operator scrolls back, so reading is never yanked out from under them.
 ///
 /// Each line's timecode is tinted with the colour of whoever was marked when
 /// it was spoken, which makes the mapping the Markdown will do visible while
@@ -28,7 +33,11 @@ namespace MeetingRecorder.Controls;
 /// right, and a name or a piece of jargon it mangles is obvious to the person
 /// in the room and unrecoverable to everyone downstream — the audio is
 /// re-transcribable, the operator's memory of what was actually said is not.
-/// Enter or clicking away commits, Esc abandons.
+/// Enter or clicking away commits, Esc abandons, Tab and Shift+Tab commit and
+/// step to the next or previous line so a run of corrections needs no mouse.
+/// While a line is open it also offers ✕ (strike the line out — a hallucinated
+/// phrase, somebody's phone) and ⤒ (join it onto the line above — whisper
+/// split a sentence where nobody paused).
 ///
 /// No whisper dependency — this is a plain WPF control, so it compiles in the
 /// Lite edition too even though nothing there ever shows it.
@@ -45,6 +54,15 @@ public sealed class TranscriptView : Border
     public const double StripHeight = 136;
 
     /// <summary>
+    /// The taller size: fourteen lines by the same arithmetic. Paid for out
+    /// of the speaker grid, which scrolls while the strip is this size — see
+    /// "The recording screen's height budget" in CLAUDE.md. Deliberately not
+    /// more: past this the strip is a document, and the document is the
+    /// review window after the meeting.
+    /// </summary>
+    public const double ExpandedStripHeight = 300;
+
+    /// <summary>
     /// Long meetings produce a lot of lines, and every one is a live WPF
     /// element. The strip is a monitor, not the transcript — the file on disk
     /// is the record — so the oldest lines are retired.
@@ -55,6 +73,7 @@ public sealed class TranscriptView : Border
     private readonly ScrollViewer _scroller;
     private readonly TextBlock _placeholder;
     private readonly Button _jumpToLive;
+    private readonly Button _resize;
 
     /// <summary>
     /// Each drawn row's segment alongside the timecode label whose colour
@@ -69,6 +88,7 @@ public sealed class TranscriptView : Border
     private readonly List<Row> _rows = new();
 
     private bool _following = true;
+    private bool _expanded;
 
     /// <summary>The row being edited, if any. Guards trimming and following.</summary>
     private Row? _editing;
@@ -87,6 +107,24 @@ public sealed class TranscriptView : Border
     /// </summary>
     public event Action<TranscriptSegment>? TextEdited;
 
+    /// <summary>
+    /// Raised when the operator struck a line out. The strip has already
+    /// dropped it; the handler removes it from the session and journals the
+    /// deletion.
+    /// </summary>
+    public event Action<TranscriptSegment>? LineDeleted;
+
+    /// <summary>
+    /// Raised when the operator joined a line onto the one above it. The
+    /// first segment now carries both lines' words and the later end time,
+    /// and is the one to journal as edited; the second has been dropped and
+    /// is the one to journal as deleted.
+    /// </summary>
+    public event Action<TranscriptSegment, TranscriptSegment>? LinesMerged;
+
+    /// <summary>Raised when the operator toggled the strip's size, so the preference can be kept.</summary>
+    public event Action<bool>? ExpandedChanged;
+
     /// <summary>One drawn line: the segment behind it and the elements showing it.</summary>
     private sealed class Row
     {
@@ -94,6 +132,8 @@ public sealed class TranscriptView : Border
         public required TextBlock TimeLabel { get; init; }
         public required TextBlock TextLabel { get; init; }
         public required Grid Container { get; init; }
+        public required StackPanel Actions { get; init; }
+        public required Button MergeUp { get; init; }
     }
 
     public TranscriptView()
@@ -109,7 +149,9 @@ public sealed class TranscriptView : Border
             12, Palette.TextMutedBrush);
         _placeholder.Margin = new Thickness(10, 6, 10, 6);
 
-        _lines.Margin = new Thickness(10, 5, 10, 5);
+        // Room on the right for the resize chip, which sits over the top
+        // corner of the text column.
+        _lines.Margin = new Thickness(10, 5, 40, 5);
 
         _scroller = new ScrollViewer
         {
@@ -126,6 +168,17 @@ public sealed class TranscriptView : Border
         _jumpToLive.VerticalAlignment = VerticalAlignment.Bottom;
         _jumpToLive.Margin = new Thickness(0, 0, 12, 6);
         _jumpToLive.Visibility = Visibility.Collapsed;
+
+        _resize = Ui.MakeButton("⤢", null, "ChipButton", (_, _) => SetExpanded(!_expanded, announce: true));
+        _resize.HorizontalAlignment = HorizontalAlignment.Right;
+        _resize.VerticalAlignment = VerticalAlignment.Top;
+        _resize.Margin = new Thickness(0, 4, 6, 0);
+        _resize.MinHeight = 22;
+        _resize.Padding = new Thickness(7, 0, 7, 0);
+        _resize.ToolTip = "Taller strip — the speaker grid scrolls to make room";
+        // Never takes the keyboard: a click on it mid-correction must not
+        // close the line being typed into, and the digits stay speaker keys.
+        _resize.Focusable = false;
 
         // Registered after the button exists, because the handler touches it
         // and a layout pass can raise this before anything is on screen.
@@ -144,9 +197,31 @@ public sealed class TranscriptView : Border
         stack.Children.Add(_placeholder);
         stack.Children.Add(_scroller);
         stack.Children.Add(_jumpToLive);
+        stack.Children.Add(_resize);
         _scroller.Visibility = Visibility.Collapsed;
 
         Child = stack;
+    }
+
+    /// <summary>Whether the strip is at its taller size.</summary>
+    public bool IsExpanded => _expanded;
+
+    /// <summary>
+    /// Set the strip's size. <paramref name="announce"/> raises
+    /// <see cref="ExpandedChanged"/> — true for the operator's click, false
+    /// when a remembered preference is being applied at start-up, which
+    /// nobody needs telling about.
+    /// </summary>
+    public void SetExpanded(bool expanded, bool announce)
+    {
+        _expanded = expanded;
+        Height = expanded ? ExpandedStripHeight : StripHeight;
+        _resize.Content = expanded ? "⤡" : "⤢";
+        _resize.ToolTip = expanded
+            ? "Back to the six-line strip"
+            : "Taller strip — the speaker grid scrolls to make room";
+        if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
+        if (announce) ExpandedChanged?.Invoke(expanded);
     }
 
     /// <summary>
@@ -176,11 +251,41 @@ public sealed class TranscriptView : Border
         // line it described.
         text.Cursor = Cursors.IBeam;
 
-        var row = Ui.Columns(1, time, text);
+        // The two repairs a line can need beyond its words, shown only while
+        // it is open: a button per line on four hundred lines is clutter the
+        // operator pays for in height and in attention, and a repair is a
+        // decision about a line they are already looking at.
+        var strike = Ui.MakeButton("✕", null, "ChipButton");
+        strike.ToolTip = "Strike this line out — nobody said it";
+        var mergeUp = Ui.MakeButton("⤒", null, "ChipButton");
+        mergeUp.ToolTip = "Join onto the line above";
+        foreach (var button in new[] { strike, mergeUp })
+        {
+            button.MinHeight = 22;
+            button.Padding = new Thickness(7, 0, 7, 0);
+            button.FontSize = 11;
+            button.VerticalAlignment = VerticalAlignment.Top;
+            // Focusable buttons would steal the caret from the field and
+            // commit the edit before the click arrives; these act on the
+            // open line as it stands.
+            button.Focusable = false;
+        }
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
+        actions.Margin = new Thickness(6, 0, 0, 0);
+        actions.Children.Add(mergeUp);
+        actions.Children.Add(strike);
+        mergeUp.Margin = new Thickness(0, 0, 4, 0);
+
+        var row = Ui.Columns(1, time, text, actions);
         row.Margin = new Thickness(0, 0, 0, 3);
 
-        var entry = new Row { Segment = segment, TimeLabel = time, TextLabel = text, Container = row };
+        var entry = new Row
+        {
+            Segment = segment, TimeLabel = time, TextLabel = text, Container = row, Actions = actions, MergeUp = mergeUp,
+        };
         text.MouseLeftButtonUp += (_, e) => { e.Handled = true; BeginEdit(entry); };
+        strike.Click += (_, _) => Delete(entry);
+        mergeUp.Click += (_, _) => MergeUp(entry);
 
         _lines.Children.Add(row);
         _rows.Add(entry);
@@ -224,6 +329,7 @@ public sealed class TranscriptView : Border
     private void BeginEdit(Row row)
     {
         if (_editing is not null) CommitEdit();
+        if (!_rows.Contains(row)) return;
 
         var box = new TextBox
         {
@@ -241,16 +347,30 @@ public sealed class TranscriptView : Border
             EndEdit(row, keep ? box.Text : null);
         }
 
-        box.KeyDown += (_, e) =>
+        // Preview rather than KeyDown for Tab: by the time a bubbling KeyDown
+        // reached the field, keyboard navigation would already have moved
+        // focus to the next control on the screen.
+        box.PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter) { e.Handled = true; Finish(true); }
             else if (e.Key == Key.Escape) { e.Handled = true; Finish(false); }
+            else if (e.Key == Key.Tab)
+            {
+                e.Handled = true;
+                var step = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? -1 : 1;
+                var index = _rows.IndexOf(row) + step;
+                Finish(true);
+                if (index >= 0 && index < _rows.Count) BeginEdit(_rows[index]);
+            }
         };
         box.LostKeyboardFocus += (_, _) => Finish(true);
 
         row.Container.Children.Remove(row.TextLabel);
         Grid.SetColumn(box, 1);
         row.Container.Children.Add(box);
+
+        row.MergeUp.IsEnabled = _rows.IndexOf(row) > 0;
+        row.Actions.Visibility = Visibility.Visible;
 
         _editing = row;
 
@@ -263,6 +383,7 @@ public sealed class TranscriptView : Border
     private void EndEdit(Row row, string? text)
     {
         _editing = null;
+        row.Actions.Visibility = Visibility.Collapsed;
 
         for (var i = row.Container.Children.Count - 1; i >= 0; i--)
         {
@@ -275,7 +396,8 @@ public sealed class TranscriptView : Border
             var trimmed = text.Trim();
             // An emptied line is a refusal to answer, not a correction: the
             // recogniser heard something, and blanking the row would lose the
-            // fact that it did. Left as it was.
+            // fact that it did. Left as it was — ✕ is the way to say "nobody
+            // said this".
             if (trimmed.Length > 0 && trimmed != row.Segment.Text)
             {
                 row.Segment.Text = trimmed;
@@ -314,6 +436,57 @@ public sealed class TranscriptView : Border
         if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
 
         if (changed) TextEdited?.Invoke(row.Segment);
+    }
+
+    /// <summary>
+    /// Strike a line out. Whisper's hallucinations — "Thank you for watching"
+    /// over a silence, a phrase from the prompt repeated into a quiet room —
+    /// are not corrections anybody can type; the only right text is none.
+    /// The line goes from the strip at once and the session on the handler's
+    /// side; the journal keeps the recogniser's original above the strike.
+    /// </summary>
+    private void Delete(Row row)
+    {
+        if (ReferenceEquals(_editing, row)) EndEdit(row, null);
+        if (!Remove(row)) return;
+        LineDeleted?.Invoke(row.Segment);
+    }
+
+    /// <summary>
+    /// Join a line onto the one above it. Whisper cuts its segments where its
+    /// decoding happens to pause, which is not always where the sentence
+    /// does, and a sentence split across two lines is two half-corrections
+    /// for the operator and a mid-sentence speaker boundary for the mapper.
+    /// The first line keeps its start, takes the second's end and both sets
+    /// of words; the second is gone.
+    /// </summary>
+    private void MergeUp(Row row)
+    {
+        var index = _rows.IndexOf(row);
+        if (index <= 0) return;
+
+        // Whatever is typed in the open line goes into the join, rather than
+        // being lost to it.
+        if (ReferenceEquals(_editing, row)) CommitEdit();
+        if (!_rows.Contains(row)) return;
+
+        var above = _rows[index - 1];
+        var joined = (above.Segment.Text.TrimEnd() + " " + row.Segment.Text.TrimStart()).Trim();
+        above.Segment.Text = joined;
+        above.Segment.EndSeconds = Math.Max(above.Segment.EndSeconds, row.Segment.EndSeconds);
+        above.TextLabel.Text = joined;
+
+        Remove(row);
+        LinesMerged?.Invoke(above.Segment, row.Segment);
+    }
+
+    private bool Remove(Row row)
+    {
+        var index = _rows.IndexOf(row);
+        if (index < 0) return false;
+        _rows.RemoveAt(index);
+        _lines.Children.Remove(row.Container);
+        return true;
     }
 
     /// <summary>

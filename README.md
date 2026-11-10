@@ -62,9 +62,12 @@ MP3 encoder are embedded inside the exe, which is why it is a fairly large
 download. The full build is compressed, so its first launch takes a few
 seconds longer while it unpacks; after that it starts normally.
 
-For GPU-accelerated transcription you need an NVIDIA card and a reasonably
-current NVIDIA driver — no CUDA Toolkit install, the kernels are inside the
-exe. Without one it falls back to the CPU on its own.
+For GPU-accelerated transcription you need a reasonably current display driver
+— NVIDIA, Intel Arc / Xe or AMD. The exe carries two GPU engines: NVIDIA
+**CUDA**, the fastest, which needs NVIDIA's CUDA 12 runtime libraries on the
+machine (see below), and **Vulkan**, which needs nothing beyond the driver and
+runs on any of those GPUs. Without a usable GPU it falls back to the CPU on its
+own, and says so.
 
 ## Live transcription
 
@@ -92,10 +95,18 @@ anywhere.)
 
 **2-1. Set up CUDA acceleration.** Create a folder (e.g., D:\CUDA or wherever you prefer) and copy `cudart64_12.dll`, `cublas64_12.dll`, and `cublasLt64_12.dll` into it. Then, add that folder path to your system PATH (or place the three .dll files directly in the VoxMark application directory).
 
+**2-2. Teach it your words (optional).** **Settings → Speech recognition →
+Vocabulary** takes the names, products and abbreviations your meetings are
+full of, one per line. Whisper is told it has already heard them, so it spells
+them your way instead of the sound-alike. **Accuracy** chooses between beam
+search (better words, about twice the work — the default on a GPU) and greedy
+decoding (the default on a CPU).
+
 **3. Turn it on.** Setup → Recording options → **Live transcription**. The
 line underneath tells you which model it found and whether it is running on
-`CUDA` or `CPU`. If something is missing it says what, and recording still
-goes ahead without a transcript — transcription can never stop a recording.
+`CUDA`, `Vulkan` or `CPU`. If something is missing it says what, and recording
+still goes ahead without a transcript — transcription can never stop a
+recording.
 
 While recording, a six-line strip under the minimap shows the words as they
 are recognised, a few seconds behind the room, with each line's timecode in
@@ -104,8 +115,19 @@ it stops following the live edge until you scroll to the bottom again.
 
 **Click a line to correct it.** Whisper is good but not right, and a name or a
 piece of jargon it mangles is obvious to you in the room and unrecoverable to
-whoever reads the file later. Enter commits, Esc abandons, and the correction
-goes into the exported Markdown as well as the on-disk journal.
+whoever reads the file later. Enter commits, Esc abandons, Tab moves on to the
+next line, and the correction goes into the exported Markdown as well as the
+on-disk journal. While a line is open, **✕** strikes it out (whisper does
+invent a sentence over a silence now and then) and **⤒** joins it onto the
+line above when a sentence came back cut in two. The **⤢** chip in the strip's
+corner makes it twice as tall — the speaker grid scrolls to make room — and
+VoxMark remembers the choice.
+
+**Review it afterwards.** The export screen's **Review transcript…** opens
+every line with the speaker it will be filed under, click-to-edit, strike-out
+and join, a filter box, and **Replace all** for the name that came back wrong
+the same way forty times. Closing it rewrites the Markdown with the corrected
+words. Works in the Lite build too, for a session recorded on a Full one.
 
 The minimap under the waveform shows the turn in progress as a growing
 coloured block, so the speaker being marked right now is visible there and not
@@ -134,9 +156,19 @@ whole point is being one small exe. Those have to be on the machine, and
 and nothing else. If they are missing the CUDA engine cannot load, VoxMark
 falls back to the CPU, and the setup screen says so before you start.
 
+**No CUDA libraries? You still get the GPU.** Since 1.4.0 the exe also carries
+a **Vulkan** engine, which runs on the same NVIDIA card — and on Intel Arc / Xe
+and AMD graphics — with only the display driver installed. The engines are
+tried in the order CUDA → Vulkan → CPU, so a machine without the CUDA runtime
+lands on Vulkan rather than the CPU. CUDA remains the faster of the two on an
+NVIDIA card, which is why the routes below are still worth taking there.
+**Settings → Speech recognition → Engine** can force any one of the three if a
+GPU driver misbehaves; the change applies from the next launch.
+
 **How to tell which one you are on:** the line under *Live transcription* on
 the setup screen, or **Settings → Speech recognition**. During a recording,
-the status beside the transcript strip reads `… / CUDA` or `… / CPU`.
+the status beside the transcript strip reads `… / CUDA`, `… / Vulkan` or
+`… / CPU`.
 
 **Requirements:** an NVIDIA GPU and driver 527 or newer (run `nvidia-smi` — the
 "CUDA Version" it prints is the highest your driver supports, and it needs to

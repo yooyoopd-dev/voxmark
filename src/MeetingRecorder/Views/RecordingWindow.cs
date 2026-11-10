@@ -235,6 +235,25 @@ public sealed class RecordingWindow : ShellWindow
             _transcription = new TranscriptionService(session.Options);
             _transcriptView = new TranscriptView();
             _transcriptView.TextEdited += OnTranscriptEdited;
+            _transcriptView.LineDeleted += OnTranscriptLineDeleted;
+            _transcriptView.LinesMerged += OnTranscriptLinesMerged;
+            // The size is this PC's habit, kept across meetings; applying it
+            // here, before the body is built, means the grid is laid out for
+            // it from the first frame rather than jumping after one.
+            _transcriptView.SetExpanded(AppSettingsStore.Load().TranscriptStripExpanded, announce: false);
+            _transcriptView.ExpandedChanged += expanded =>
+            {
+                try
+                {
+                    var settings = AppSettingsStore.Load();
+                    settings.TranscriptStripExpanded = expanded;
+                    AppSettingsStore.Save(settings);
+                }
+                catch (Exception ex)
+                {
+                    AppPaths.Note("Could not remember the transcript strip size: " + ex.Message);
+                }
+            };
             _transcriptStatus = Ui.Text("Starting…", 11, Palette.TextMutedBrush);
             // Anything long enough to need more room than this belongs in the
             // notice banner, which is where the real failures already go.
@@ -387,7 +406,8 @@ public sealed class RecordingWindow : ShellWindow
     /// </summary>
     private UIElement BuildTranscriptRow()
     {
-        var hint = Ui.Wrap("Click a line to correct it", 10, Palette.TextFaintBrush);
+        var hint = Ui.Wrap("Click a line to correct it · Tab for the next · ✕ strikes it out · ⤒ joins it to the line above",
+            10, Palette.TextFaintBrush);
         hint.MaxWidth = 200;
         hint.Margin = new Thickness(0, 3, 0, 0);
 
@@ -640,6 +660,44 @@ public sealed class RecordingWindow : ShellWindow
         }
     }
 
+    /// <summary>
+    /// The operator struck a line out. Gone from the session so the export
+    /// never sees it, and journalled so a crash or a reopen never brings it
+    /// back. Attribution is untouched — the marks are the operator's, the
+    /// words were the recogniser's.
+    /// </summary>
+    private void OnTranscriptLineDeleted(TranscriptSegment segment)
+    {
+        _session.Transcript.Remove(segment);
+        try
+        {
+            _transcriptStore?.AppendDelete(segment);
+        }
+        catch (Exception ex)
+        {
+            AppPaths.Note("Could not journal a transcript deletion: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Two lines became one. The survivor is journalled as an edit — its new
+    /// words and its new end — and the absorbed line as a deletion, which is
+    /// exactly what Replay needs to rebuild the join.
+    /// </summary>
+    private void OnTranscriptLinesMerged(TranscriptSegment kept, TranscriptSegment removed)
+    {
+        _session.Transcript.Remove(removed);
+        try
+        {
+            _transcriptStore?.AppendEdit(kept);
+            _transcriptStore?.AppendDelete(removed);
+        }
+        catch (Exception ex)
+        {
+            AppPaths.Note("Could not journal a transcript merge: " + ex.Message);
+        }
+    }
+
     private void OnTranscriptionStatus(string status)
     {
         Dispatcher.InvokeAsync(() =>
@@ -839,12 +897,13 @@ public sealed class RecordingWindow : ShellWindow
 
         var backlog = _transcription.BacklogSeconds;
         var dropped = _transcription.DroppedSeconds;
+        var suppressed = _transcription.SuppressedSegments;
 
         _transcriptStatus.Text = dropped >= 1
             ? "⚠ " + dropped.ToString("0") + " s not transcribed"
             : backlog > 25
                 ? backlog.ToString("0") + " s behind"
-                : _transcription.Description;
+                : _transcription.Description + (suppressed > 0 ? " · " + suppressed + " non-speech dropped" : "");
 
         _transcriptStatus.Foreground = dropped >= 1 ? Palette.WarnBrush : Palette.TextMutedBrush;
 #endif
