@@ -46,12 +46,15 @@ public sealed class SpeakerTile : Border
     private readonly Border _colourBar;
     private readonly StackPanel _cardActions;
 
+    private readonly bool _compact;
+
     private bool _isOpen;
 
     public SpeakerTile(Speaker speaker, TileDensity density, bool compact = false)
     {
         _speaker = speaker;
         _density = density;
+        _compact = compact;
         _color = Palette.ForSlot(speaker.SlotIndex);
 
         CornerRadius = new CornerRadius(8);
@@ -60,9 +63,11 @@ public sealed class SpeakerTile : Border
         Background = Palette.SurfaceBrush;
         Cursor = Cursors.Hand;
         Height = HeightFor(density, compact);
-        // Section 02: tiles never fall below 72px tall or 160px wide.
+        // Section 02 sets 72px tall and 160px wide. The compact recording
+        // layout goes under the height floor by the user's explicit choice,
+        // to give the live transcript three more lines; see HeightFor.
         MinWidth = 160;
-        MinHeight = 72;
+        MinHeight = compact ? CompactFloor : 72;
         SnapsToDevicePixels = true;
 
         _colourBar = new Border
@@ -87,7 +92,7 @@ public sealed class SpeakerTile : Border
         {
             Text = speaker.Name,
             FontFamily = Ui,
-            FontSize = NameSizeFor(density),
+            FontSize = compact ? CompactNameSizeFor(density) : NameSizeFor(density),
             FontWeight = FontWeights.Medium,
             Foreground = Palette.TextBrush,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -127,8 +132,9 @@ public sealed class SpeakerTile : Border
             VerticalAlignment = VerticalAlignment.Center,
             Opacity = RestingActionOpacity,
         };
-        _cardActions.Children.Add(IconButton("✎", "Rename this speaker", () => EditRequested?.Invoke(_speaker.SlotIndex)));
-        _cardActions.Children.Add(IconButton("✕", "Remove this speaker", () => DeleteRequested?.Invoke(_speaker.SlotIndex)));
+        var iconSize = compact ? 18 : 22;
+        _cardActions.Children.Add(IconButton("✎", "Rename this speaker", iconSize, () => EditRequested?.Invoke(_speaker.SlotIndex)));
+        _cardActions.Children.Add(IconButton("✕", "Remove this speaker", iconSize, () => DeleteRequested?.Invoke(_speaker.SlotIndex)));
 
         var top = new Grid();
         top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -164,6 +170,14 @@ public sealed class SpeakerTile : Border
         };
         Grid.SetColumn(_role, 0);
         bottom.Children.Add(_role);
+
+        // A compact tile has no height for a middle row, so the open mark's
+        // start takes the sub title's cell while the mark is open.
+        if (compact)
+        {
+            Grid.SetColumn(_markTime, 0);
+            bottom.Children.Add(_markTime);
+        }
 
         if (density == TileDensity.Roomy)
         {
@@ -204,12 +218,15 @@ public sealed class SpeakerTile : Border
         stack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         stack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Grid.SetRow(top, 0);
-        Grid.SetRow(_markTime, 1);
         Grid.SetRow(bottom, 2);
         stack.Children.Add(top);
-        stack.Children.Add(_markTime);
+        if (!compact)
+        {
+            Grid.SetRow(_markTime, 1);
+            stack.Children.Add(_markTime);
+        }
         stack.Children.Add(bottom);
-        stack.Margin = new Thickness(14, 12, 14, 12);
+        stack.Margin = compact ? new Thickness(12, 6, 12, 6) : new Thickness(14, 12, 14, 12);
 
         var root = new Grid();
         root.Children.Add(stack);
@@ -252,12 +269,12 @@ public sealed class SpeakerTile : Border
     /// listens to is more obvious here than relying on a control template's
     /// internals to do it.
     /// </summary>
-    private static Border IconButton(string glyph, string tooltip, Action onClick)
+    private static Border IconButton(string glyph, string tooltip, double size, Action onClick)
     {
         var icon = new Border
         {
-            Width = 22,
-            Height = 22,
+            Width = size,
+            Height = size,
             CornerRadius = new CornerRadius(5),
             Background = Palette.WellBrush,
             BorderBrush = Palette.HairlineBrush,
@@ -337,12 +354,14 @@ public sealed class SpeakerTile : Border
             _markTime.Text = "▶ " + Tenths(markStartSeconds);
             _markTime.Foreground = new SolidColorBrush(_color);
             _markTime.Visibility = Visibility.Visible;
+            if (_compact) _role.Visibility = Visibility.Collapsed;
         }
         else
         {
             _meta.Text = talkSeconds > 0 ? Clock(talkSeconds) : "—";
             _meta.Foreground = Palette.TextMutedBrush;
             _markTime.Visibility = Visibility.Collapsed;
+            if (_compact) _role.Visibility = Visibility.Visible;
         }
 
         if (_talkTrack is not null && _talkFill is not null)
@@ -386,40 +405,45 @@ public sealed class SpeakerTile : Border
 
     /// <summary>
     /// Tile height for a density band. <paramref name="compact"/> is the
-    /// recording screen giving up a little more to the live transcript strip
-    /// — the grid stays the same shape, the tiles just lose slack.
+    /// recording screen with the live transcript strip, which takes nine
+    /// lines of it — see "The recording screen's height budget" in CLAUDE.md.
     ///
-    /// These are about 30% shorter than they were, so the whole grid fits the
-    /// default window height without a scrollbar: an operator hunting for a
-    /// tile that has scrolled out of sight is an operator not marking. Section
-    /// 02's <b>72px floor is never crossed</b>, which is what stops the
-    /// shrinking from reaching the point where a tile is no longer a
-    /// comfortable target in a dim room — the two densest bands sit on it
-    /// already, and the roomier ones keep the proportions between them.
+    /// Without the strip, section 02's 72px floor holds. With it, the tiles
+    /// are cut to what three rows need to fit the 201px left for the grid
+    /// (<c>rows × (tile + 8) + 12</c>): <see cref="CompactFloor"/> for the
+    /// three-row bands, by the user's explicit request to trade tile height
+    /// for transcript lines. A compact tile is two text rows — name over sub
+    /// title / talk time — with the open mark's time in the sub title's place.
     /// </summary>
     public static double HeightFor(TileDensity density, bool compact = false)
     {
-        var height = density switch
+        if (compact)
+        {
+            return density switch
+            {
+                TileDensity.Roomy => 76.0,
+                TileDensity.Default => 64.0,
+                _ => CompactFloor,
+            };
+        }
+
+        return density switch
         {
             TileDensity.Roomy => 104.0,
             TileDensity.Default => 84.0,
             TileDensity.Tight => 74.0,
             _ => 72.0,
         };
-
-        return compact ? Math.Max(72, height - CompactReductionFor(density)) : height;
     }
 
-    /// <summary>
-    /// Roomy tiles have the most slack to give and the dense ones almost
-    /// none, so the reduction tapers rather than being flat.
-    /// </summary>
-    private static double CompactReductionFor(TileDensity density) => density switch
+    /// <summary>The compact layout's smallest tile: 3 rows × 62 + 12 = 198 of 201px.</summary>
+    public const double CompactFloor = 54;
+
+    private static double CompactNameSizeFor(TileDensity density) => density switch
     {
-        TileDensity.Roomy => 12,
-        TileDensity.Default => 8,
-        TileDensity.Tight => 2,
-        _ => 0,
+        TileDensity.Roomy => 18,
+        TileDensity.Default => 16,
+        _ => 14,
     };
 
     /// <summary>

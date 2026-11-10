@@ -136,8 +136,10 @@ Implemented, with the guide section each answers to:
   are sized so the whole grid fits the default window height without a
   scrollbar — an operator hunting for a tile that scrolled out of sight is an
   operator not marking. Two things hold that:
-  section 02's **72px floor**, which 7–12 speakers already sit on, so no
-  further height can come from the tiles; and the fact that there is **no
+  section 02's **72px floor**, which 7–12 speakers already sit on without
+  transcription — with the live strip on, the tiles go **below** it, to
+  54px, by the user's explicit request to trade tile height for three more
+  transcript lines (`SpeakerTile.HeightFor`, `CompactFloor`); and the fact that there is **no
   "＋ Add" cell in the grid**. That cell used to take a whole tile slot, which
   pushed 4, 6 and 9 speakers onto an extra row and was the single reason the
   grid did not fit — the header's "＋ Add speaker" and Ctrl+N are the same
@@ -192,7 +194,7 @@ Implemented, with the guide section each answers to:
   See "Losing the input device" below for what that fallback actually has to
   survive.
 - **Speech recognition (Full edition)** — beyond the guide: an opt-in
-  on-device whisper pass, a six-line live transcript strip under the
+  on-device whisper pass, a nine-line live transcript strip under the
   minimap, and a `## Transcript` section mapping the words onto the marks.
   Clicking a line in the strip opens it for editing: whisper is good but not
   right, and a name or a piece of jargon it mangles is obvious to the person
@@ -469,21 +471,24 @@ transcription on (`_compactLayout`):
 | header rule | 1 |
 | waveform well + margin | 156 |
 | minimap row + margin | 23 |
-| transcript row + margin (`StripHeight` 136) | 142 |
+| transcript row + margin (`StripHeight` 197, nine lines) | 203 |
 | speakers header + margin | 32 |
 | marks dock (`CompactCollapsedDockHeight`) | 150 |
-| **left for the grid** | **262** |
+| **left for the grid** | **201** |
 
-The grid needs `rows × (tile + 8) + 12`, worst case 3 rows of 72px tiles =
-252 — about 10px spare. Two limits that follow from this and are *not* bugs:
+The grid needs `rows × (tile + 8) + 12`, worst case 3 rows of 54px compact
+tiles = 198 — 3px spare. A compact tile is two text rows (name, then sub
+title and talk time), and the open mark's start replaces the sub title while
+the mark is open, because there is no height for the middle row a full tile
+has. Without transcription the strip is absent and the 72px floor holds. Two limits that follow from this and are *not* bugs:
 
 - **A visible notice banner costs ~60px**, so the densest rosters scroll while
   one is up. A notice is exceptional and the scrollbar is there for it; "no
   scroll" describes the normal case, not an invariant.
-- **The expanded transcript strip costs another 164px** (`ExpandedStripHeight`
-  300 against `StripHeight` 136), so the grid scrolls whenever it is up. That
+- **The expanded transcript strip costs another 103px** (`ExpandedStripHeight`
+  300 against `StripHeight` 197), so the grid scrolls whenever it is up. That
   is the operator's own trade, made with the ⤢ toggle and remembered per PC,
-  and the six-line default is what the budget above is written for.
+  and the nine-line default is what the budget above is written for.
 - **The guarantee is for the default 860px height**, not the 1180×760 minimum
   section 05 sets. At 760 the grid gets 162px and scrolls, which is what a
   scrollable grid is for.
