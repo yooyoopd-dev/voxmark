@@ -3,6 +3,7 @@ using MeetingRecorder.Models;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Whisper.net;
+using Whisper.net.SamplingStrategy;
 
 namespace MeetingRecorder.Services;
 
@@ -318,8 +319,10 @@ public sealed class TranscriptionService : IDisposable
                 "fast" => false,
                 _ => onGpu,
             };
+            // The strategy builders come back typed as the interface in
+            // 1.8.1; the beam size lives on the concrete class.
             builder = beam
-                ? builder.WithBeamSearchSamplingStrategy().WithBeamSize(5).ParentBuilder
+                ? ((BeamSearchSamplingStrategyBuilder)builder.WithBeamSearchSamplingStrategy()).WithBeamSize(5).ParentBuilder
                 : builder.WithGreedySamplingStrategy().ParentBuilder;
 
             _processor = builder.Build();

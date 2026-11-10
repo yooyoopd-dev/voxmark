@@ -484,14 +484,14 @@ public sealed class TranscriptEditorWindow : ShellWindow
 
     private static bool IsInside(DependencyObject source, DependencyObject ancestor)
     {
-        for (var node = source; node is not null; node = Parent(node))
+        for (var node = source; node is not null; node = ParentOf(node))
         {
             if (ReferenceEquals(node, ancestor)) return true;
         }
         return false;
     }
 
-    private static DependencyObject? Parent(DependencyObject node)
+    private static DependencyObject? ParentOf(DependencyObject node)
     {
         if (node is Visual or System.Windows.Media.Media3D.Visual3D)
         {
