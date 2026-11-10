@@ -90,6 +90,7 @@ public sealed class TranscriptView : Border
 
     private bool _following = true;
     private bool _expanded;
+    private double _fitHeight = StripHeight;
 
     /// <summary>The row being edited, if any. Guards trimming and following.</summary>
     private Row? _editing;
@@ -204,6 +205,23 @@ public sealed class TranscriptView : Border
         Child = stack;
     }
 
+    private double CurrentHeight => _expanded ? Math.Max(ExpandedStripHeight, _fitHeight) : _fitHeight;
+
+    /// <summary>
+    /// The resting height the recording screen hands the strip: never less
+    /// than <see cref="StripHeight"/>, and more when the speaker grid needs
+    /// fewer rows than the three the budget is written for, so the strip
+    /// takes the space the grid leaves empty instead of leaving a gap.
+    /// </summary>
+    public void SetFitHeight(double height)
+    {
+        var fit = Math.Max(StripHeight, Math.Floor(height));
+        if (Math.Abs(fit - _fitHeight) < 1) return;
+        _fitHeight = fit;
+        Height = CurrentHeight;
+        if (_following) Dispatcher.InvokeAsync(_scroller.ScrollToEnd);
+    }
+
     /// <summary>Whether the strip is at its taller size.</summary>
     public bool IsExpanded => _expanded;
 
@@ -216,7 +234,7 @@ public sealed class TranscriptView : Border
     public void SetExpanded(bool expanded, bool announce)
     {
         _expanded = expanded;
-        Height = expanded ? ExpandedStripHeight : StripHeight;
+        Height = CurrentHeight;
         _resize.Content = expanded ? "⤡" : "⤢";
         _resize.ToolTip = expanded
             ? "Back to the nine-line strip"
