@@ -767,9 +767,10 @@ requirement gets broken by accident.
 CI (`.github/workflows/build-windows-exe.yml`) publishes both exes on every
 push to `main` and uploads them as build artifacts; pushing a `v*` tag also
 attaches both to a GitHub Release — and then strips the `.exe` assets from
-every **older** release, since two 150–230 MB binaries per version count
-against the repository's storage forever and only the newest is a download
-anyone wants. Older releases keep their tag, notes and source archives, and
+every release **older than the previous one**, since two 150–230 MB binaries
+per version count against the repository's storage forever. The newest and
+the one just before it keep their exes, at the user's request, so there is
+always a build to fall back to. Older releases keep their tag, notes and source archives, and
 gain a line saying where the binaries went. "Older" is measured against the
 release the run just published, so re-running an old tag never strips a newer
 one. If you change build flags, make sure that
