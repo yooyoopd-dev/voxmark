@@ -42,6 +42,12 @@ public sealed class SettingsWindow : ShellWindow
     private readonly Dropdown _engine;
     private readonly Dropdown _accuracy;
     private readonly TextBox _vocabulary;
+    private readonly TextBox _corrections;
+    private readonly Dropdown _dictionaryLanguage;
+    private readonly TextBlock _dictionaryStatus;
+
+    /// <summary>Which language's lists the two dictionary boxes are showing: "en" or "ko".</summary>
+    private string _dictionaryList = "en";
 #endif
 
     public SettingsWindow() : base("VoxMark — settings", 820, 760)
@@ -150,21 +156,34 @@ public sealed class SettingsWindow : ShellWindow
         };
         _accuracy.Select(string.IsNullOrWhiteSpace(speech.Accuracy) ? "auto" : speech.Accuracy.Trim().ToLowerInvariant());
 
-        _vocabulary = new TextBox
+        // The dictionary is kept per language, and the boxes show one
+        // language at a time — the one this PC recognises by default first.
+        _dictionaryList = TranscriptDictionary.ListFor(speech.Language) == "ko" ? "ko" : "en";
+
+        _vocabulary = DictionaryBox();
+        _corrections = DictionaryBox();
+        _dictionaryStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
+
+        _dictionaryLanguage = new Dropdown("ChipButton") { MinHeight = 26, PopupMinWidth = 160 };
+        _dictionaryLanguage.SetItems(new (string, object)[] { ("English", "en"), ("Korean", "ko") });
+        _dictionaryLanguage.Select(_dictionaryList);
+        _dictionaryLanguage.DisplayText = TranscriptDictionary.LanguageName(_dictionaryList);
+        _dictionaryLanguage.SelectionChanged += value =>
         {
-            Text = speech.Vocabulary,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            FontSize = 12.5,
-            MinHeight = 64,
-            MaxHeight = 140,
+            if (value is not string list || list == _dictionaryList) return;
+            // What was typed for the language being left is kept first.
+            SaveDictionary();
+            _dictionaryList = list;
+            ShowDictionary();
         };
-        // Saved when the field is left rather than per keystroke: a settings
+        ShowDictionary();
+
+        // Saved when a field is left rather than per keystroke: a settings
         // write per character is wasteful, and leaving the box is the moment
         // the operator is done with it. Closing the window counts as leaving.
-        _vocabulary.LostFocus += (_, _) => SaveVocabulary();
-        Closing += (_, _) => SaveVocabulary();
+        _vocabulary.LostFocus += (_, _) => SaveDictionary();
+        _corrections.LostFocus += (_, _) => SaveDictionary();
+        Closing += (_, _) => SaveDictionary();
 #endif
 
         _offset.Select(settings.MarkStartOffsetSeconds);
@@ -320,16 +339,32 @@ public sealed class SettingsWindow : ShellWindow
             Ui.Filler(),
             _accuracy);
 
+        var dictionaryHeader = Ui.Columns(1,
+            Ui.Text("Dictionary", 13.5, Palette.TextBrush),
+            Ui.Filler(),
+            _dictionaryLanguage);
+
         var vocabularyHint = Ui.Wrap(
-            "Names, products, abbreviations and jargon the recogniser should expect — one per line or " +
-            "comma-separated, about a hundred words at most. Whisper is told it has already heard them, so " +
-            "it prefers these spellings over sound-alikes. Changes apply from the next meeting.",
+            "Vocabulary — names, products and abbreviations to expect, one per line or comma-separated, " +
+            "about a hundred words at most. Whisper is told it has already heard them, which makes those " +
+            "spellings more likely; it is a nudge, not a guarantee.",
             11.5, Palette.TextMutedBrush);
-        vocabularyHint.Margin = new Thickness(0, 6, 0, 0);
+
+        var correctionsHint = Ui.Wrap(
+            "Corrections — one per line, written  heard => correct  (for example  in video => NVIDIA). " +
+            "Every time the recogniser produces the left side it is rewritten to the right side, and the " +
+            "strip counts the fixes, so you can see the rule working. Use these for a word that keeps " +
+            "coming back wrong. The export screen lists the corrections you typed during a meeting and " +
+            "adds them here in one click.",
+            11.5, Palette.TextMutedBrush);
+
         var vocabularyRow = Ui.Vertical(6,
-            Ui.Text("Vocabulary", 13.5, Palette.TextBrush),
+            dictionaryHeader,
+            vocabularyHint,
             _vocabulary,
-            vocabularyHint);
+            correctionsHint,
+            _corrections,
+            _dictionaryStatus);
 
         var cudaBrowse = Ui.MakeButton("Browse…", null, "ChipButton", (_, _) => BrowseForCudaFolder());
         cudaBrowse.Margin = new Thickness(10, 0, 0, 0);
@@ -646,11 +681,55 @@ public sealed class SettingsWindow : ShellWindow
         _ => code,
     };
 
-    private void SaveVocabulary()
+    private static TextBox DictionaryBox() => new()
     {
-        var text = _vocabulary.Text ?? "";
-        if (text == TranscriptionSettingsStore.Load().Vocabulary) return;
-        Speech(s => s.Vocabulary = text);
+        AcceptsReturn = true,
+        TextWrapping = TextWrapping.Wrap,
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        FontSize = 12.5,
+        MinHeight = 64,
+        MaxHeight = 140,
+    };
+
+    /// <summary>Put the selected language's lists in the boxes, read fresh — the export screen adds to them too.</summary>
+    private void ShowDictionary()
+    {
+        var speech = TranscriptionSettingsStore.Load();
+        _vocabulary.Text = TranscriptDictionary.VocabularyFor(speech, _dictionaryList);
+        _corrections.Text = TranscriptDictionary.CorrectionsFor(speech, _dictionaryList);
+        RefreshDictionaryStatus();
+    }
+
+    private void SaveDictionary()
+    {
+        var vocabulary = _vocabulary.Text ?? "";
+        var corrections = _corrections.Text ?? "";
+
+        var saved = TranscriptionSettingsStore.Load();
+        if (vocabulary != TranscriptDictionary.VocabularyFor(saved, _dictionaryList) ||
+            corrections != TranscriptDictionary.CorrectionsFor(saved, _dictionaryList))
+        {
+            var list = _dictionaryList;
+            Speech(s => TranscriptDictionary.Set(s, list, vocabulary, corrections));
+        }
+
+        RefreshDictionaryStatus();
+    }
+
+    /// <summary>
+    /// Read the boxes back as the recogniser will: how many terms and how
+    /// many rules were understood. A correction typed without its "=>" is
+    /// otherwise silently not a correction.
+    /// </summary>
+    private void RefreshDictionaryStatus()
+    {
+        var (terms, rules) = TranscriptDictionary.Measure(_vocabulary.Text, _corrections.Text);
+        var name = TranscriptDictionary.LanguageName(_dictionaryList);
+        _dictionaryStatus.Text =
+            name + ": " + terms + (terms == 1 ? " term, " : " terms, ") +
+            rules + (rules == 1 ? " correction" : " corrections") + " understood. Used when the meeting's " +
+            "language is " + name + "; a meeting set to Auto-detect or another language gets both lists. " +
+            "Changes apply from the next meeting.";
     }
 
     /// <summary>Read-modify-write, so one field never clears the others.</summary>
