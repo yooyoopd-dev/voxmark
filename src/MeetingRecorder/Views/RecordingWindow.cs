@@ -927,12 +927,17 @@ public sealed class RecordingWindow : ShellWindow
         var backlog = _transcription.BacklogSeconds;
         var dropped = _transcription.DroppedSeconds;
         var suppressed = _transcription.SuppressedSegments;
+        var repeated = _transcription.RepeatedSegments;
+        var fixes = _transcription.DictionaryFixes;
 
         _transcriptStatus.Text = dropped >= 1
             ? "⚠ " + dropped.ToString("0") + " s not transcribed"
             : backlog > 25
                 ? backlog.ToString("0") + " s behind"
-                : _transcription.Description + (suppressed > 0 ? " · " + suppressed + " non-speech dropped" : "");
+                : _transcription.Description +
+                  (suppressed > 0 ? " · " + suppressed + " non-speech dropped" : "") +
+                  (repeated > 0 ? " · " + repeated + " repeats dropped" : "") +
+                  (fixes > 0 ? " · " + fixes + " dictionary fixes" : "");
 
         _transcriptStatus.Foreground = dropped >= 1 ? Palette.WarnBrush : Palette.TextMutedBrush;
 #endif

@@ -200,14 +200,16 @@ jobs:
             publish/lite/VoxMark-Lite.exe
 
       # Two 150–230 MB EXEs per release adds up fast, and GitHub counts every
-      # one of them against the repository forever. Only the newest release
-      # is a download anyone wants, so the older ones keep their tag, notes
-      # and source archives and lose just the binaries.
+      # one of them against the repository forever. The newest release and
+      # the one just before it keep their EXEs — the previous build is the
+      # way back if the new one misbehaves on a meeting-room PC. Every
+      # release older than those two keeps its tag, notes and source
+      # archives and loses just the binaries.
       #
       # "Older" is measured against the release this run published, not
       # against "everything else": re-running an old tag's workflow must not
       # strip the assets off a newer release.
-      - name: Keep the EXEs only on the newest release
+      - name: Keep the EXEs on the newest two releases
         if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
         shell: pwsh
         env:
@@ -235,9 +237,14 @@ jobs:
           $freed = 0
           $failed = 0
 
-          foreach ($release in $releases) {
-              if ($release.tag_name -eq $keep) { continue }
-              if ((Published $release) -ge $cutoff) { continue }
+          # Releases older than the one just published, newest first. The
+          # first of them is the previous release and keeps its binaries.
+          $older = @($releases |
+              Where-Object { $_.tag_name -ne $keep -and -not $_.draft -and (Published $_) -lt $cutoff } |
+              Sort-Object { Published $_ } -Descending)
+          if ($older.Count -gt 0) { Write-Host "$($older[0].tag_name): kept as the previous release" }
+
+          foreach ($release in ($older | Select-Object -Skip 1)) {
 
               $binaries = @($release.assets | Where-Object { $_.name -like "*.exe" })
               if ($binaries.Count -eq 0) { continue }
@@ -252,7 +259,7 @@ jobs:
 
               # Say so on the release itself, so a visitor who lands on an old
               # version finds an explanation rather than an empty file list.
-              $note = "_Binaries for this version were removed to keep the repository's release storage bounded. The current release always carries both EXEs._"
+              $note = "_Binaries for this version were removed to keep the repository's release storage bounded. The two most recent releases always carry both EXEs._"
               if ($release.body -notlike "*release storage bounded*") {
                   $body = ($release.body + "`n`n" + $note).TrimStart("`n")
                   gh api -X PATCH "repos/$repo/releases/$($release.id)" -f body="$body" | Out-Null

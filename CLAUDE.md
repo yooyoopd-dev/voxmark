@@ -214,7 +214,13 @@ Implemented, with the guide section each answers to:
   After the meeting, **Review transcript…** on the export screen opens
   `TranscriptEditorWindow` — every line with the speaker it will be filed
   under, click-to-edit, strike-out and join, a filter box and **Replace all**
-  for the name whisper got wrong the same way forty times. It appends to the
+  for the name whisper got wrong the same way forty times. The export screen
+  then lists **Corrections you made**: `TranscriptStore.ReadEdits` reads each
+  edited line back beside its original — the journal keeps both, which is the
+  other thing append-only buys — `TranscriptDictionary.Diff` reduces the pair
+  to the words that were swapped, and each swap gets an "Add to dictionary"
+  button. One at a time, never "add all": a swap that was right for one
+  sentence is not automatically a rule. The review window appends to the
   same `transcript.jsonl` through `TranscriptStore` and the export rewrites
   every Markdown when it closes with changes, so the corrected words reach
   the file by the path the originals took. It names no Whisper.net type, so a
@@ -329,16 +335,29 @@ is the failure mode this exists to prevent.
 
 ### What the decoder is told, and what it is not allowed to say
 
-Four levers in `TranscriptionService.Begin`, all reading
+Five levers in `TranscriptionService.Begin`, all reading
 `TranscriptionSettingsStore` at start rather than `SessionOptions`, because
 they are properties of the machine and the company, not of a meeting:
 
 - **Vocabulary → initial prompt** (`WithPrompt`). Names, products and
   abbreviations the operator typed in Settings, comma-joined and capped at
   600 characters by `BuildPrompt` — whisper keeps the *tail* of an over-long
-  prompt, so the cap is what keeps the first-typed terms in play. This is the
-  one lever that fixes a word the model keeps mangling without a different
-  model, and it is free per chunk.
+  prompt, so the cap is what keeps the first-typed terms in play. It biases
+  the decoder and nothing more: it helps, and nothing proves it helped.
+- **Corrections → rewrite after decoding** (`TranscriptDictionary`). One
+  `heard => correct` rule per line, applied to every recognised line in
+  `OnSegment` before it is journalled, and counted (`DictionaryFixes`, shown
+  on the strip as "N dictionary fixes") — the deterministic fix for a word
+  that comes back wrong the same way however it is prompted. Each rule's
+  right-hand side also joins the prompt. Latin text matches on word
+  boundaries; Hangul matches as a substring, because Korean attaches its
+  particles to the word. `TranscriptDictionary` names no Whisper.net type and
+  builds into both editions.
+- **Both lists are per language**, English and Korean
+  (`Vocabulary`/`Corrections` and `VocabularyKo`/`CorrectionsKo` — the
+  unsuffixed pair is English because it predates the split). The meeting's
+  language picks the list; Auto-detect and every other language get both,
+  since nothing says which applies.
 - **Accuracy → sampling.** Beam search of five (OpenAI's own default) on a
   GPU, greedy on a CPU; `best` and `fast` force either. Beam costs about
   twice the decode and finds visibly better text.
@@ -354,14 +373,25 @@ they are properties of the machine and the company, not of a meeting:
   fewer encoder passes per minute of meeting, at the price of latency the CPU
   strip was already paying. A marked handover still cuts early.
 
-And two filters, because whisper invents text where there is none: a chunk
+**No context between chunks** (`WithNoContext`). Carrying the previous
+chunk's text into the next is how one repeated or invented sentence feeds
+itself forward; the vocabulary prompt is still applied to every chunk.
+
+And the filters, because whisper invents text where there is none: a chunk
 whose loudest sample is under −60 dBFS (`SilencePeak`) is a muted input, not
 a quiet room, and is not decoded at all; a segment that is only non-speech
 annotation (`[BLANK_AUDIO]`, `(music)`, `♪` — `NonSpeechOnly`) or that
 whisper itself rated as probably-silent *and* low-confidence
 (`NoSpeechProbabilityFloor` / `HallucinationProbabilityCeiling`, which needs
-`WithProbabilities()`) is dropped. Both counts are surfaced on the strip's
-status line rather than hidden, the same way dropped audio is. **Tighten these
+`WithProbabilities()`) is dropped. So is a segment that **starts after the
+chunk's own audio has ended** — whisper pads every chunk to 30 s and can
+decode a sentence out of the padding, typically the one it just produced. And
+a line **identical to the one before it** within `RepeatWindowSeconds` is the
+decoder's loop (reported on a large-v3-turbo model as one sentence stamped out
+every second or two): dropped outright from `SubstantialRepeatLength` letters
+up, and from the third in a row for an interjection, since people do say
+"Yeah." twice. Every count is surfaced on the strip's status line rather than
+hidden, the same way dropped audio is. **Tighten these
 only against recordings**: a filter that eats a quiet interjection is worse
 than one that lets a hallucination through for the operator to strike out.
 
@@ -510,7 +540,7 @@ is *what the value is about*, not how often it changes:
 - **`SettingsWindow`, reached from the Library** — the machine. Where
   recordings are saved (`AppSettingsStore.SessionsRoot`), the mark-start
   offset and the MP3 bitrate a new meeting starts from, the whisper model
-  file, its language, engine, accuracy and vocabulary
+  file, its language, engine, accuracy and the per-language dictionary
   (`TranscriptionSettingsStore`), and the copyable diagnostics Log. An
   operator sets these once on this PC.
 - **`SetupWindow`, before every meeting** — the meeting. Title, date, room,
@@ -737,9 +767,10 @@ requirement gets broken by accident.
 CI (`.github/workflows/build-windows-exe.yml`) publishes both exes on every
 push to `main` and uploads them as build artifacts; pushing a `v*` tag also
 attaches both to a GitHub Release — and then strips the `.exe` assets from
-every **older** release, since two 150–230 MB binaries per version count
-against the repository's storage forever and only the newest is a download
-anyone wants. Older releases keep their tag, notes and source archives, and
+every release **older than the previous one**, since two 150–230 MB binaries
+per version count against the repository's storage forever. The newest and
+the one just before it keep their exes, at the user's request, so there is
+always a build to fall back to. Older releases keep their tag, notes and source archives, and
 gain a line saying where the binaries went. "Older" is measured against the
 release the run just published, so re-running an old tag never strips a newer
 one. If you change build flags, make sure that

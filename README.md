@@ -96,11 +96,26 @@ anywhere.)
 **2-1. Set up CUDA acceleration.** Create a folder (e.g., D:\CUDA or wherever you prefer) and copy `cudart64_12.dll`, `cublas64_12.dll`, and `cublasLt64_12.dll` into it. Then, add that folder path to your system PATH (or place the three .dll files directly in the VoxMark application directory).
 
 **2-2. Teach it your words (optional).** **Settings → Speech recognition →
-Vocabulary** takes the names, products and abbreviations your meetings are
-full of, one per line. Whisper is told it has already heard them, so it spells
-them your way instead of the sound-alike. **Accuracy** chooses between beam
-search (better words, about twice the work — the default on a GPU) and greedy
-decoding (the default on a CPU).
+Dictionary** holds two lists, kept separately for **English** and **Korean**
+(pick the language at the top of the block; a meeting set to Auto-detect or
+another language uses both):
+
+- **Vocabulary** — the names, products and abbreviations your meetings are
+  full of, one per line. Whisper is told it has already heard them, which
+  makes those spellings more likely. It is a nudge, not a guarantee.
+- **Corrections** — one rule per line, written `heard => correct`, for
+  example `in video => NVIDIA`. Whenever the recogniser produces the left
+  side, it is rewritten to the right side. This is the fix for a word that
+  keeps coming back wrong the same way, and the strip counts the rewrites
+  ("3 dictionary fixes") so you can see the rule working.
+
+You do not have to write the rules from memory: after a meeting, the export
+screen lists **Corrections you made** — every word you changed by hand in the
+transcript, most-repeated first — and adds any of them to the dictionary in
+one click.
+
+**Accuracy** chooses between beam search (better words, about twice the work
+— the default on a GPU) and greedy decoding (the default on a CPU).
 
 **3. Turn it on.** Setup → Recording options → **Live transcription**. The
 line underneath tells you which model it found and whether it is running on

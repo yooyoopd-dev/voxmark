@@ -44,8 +44,26 @@ public static class TranscriptionSettingsStore
         /// decoder prefer that spelling over "Fox Mark" every time it hears
         /// it. Machine-wide, like the model — the people and the products in
         /// a company's meetings are mostly the same from one to the next.
+        ///
+        /// This is the <b>English</b> list; the name predates the split by
+        /// language, and renaming it would orphan what is already saved.
+        /// <see cref="TranscriptDictionary"/> decides which lists a meeting gets.
         /// </summary>
         public string Vocabulary { get; set; } = "";
+
+        /// <summary>The Korean vocabulary, used when a meeting is recognised as Korean.</summary>
+        public string VocabularyKo { get; set; } = "";
+
+        /// <summary>
+        /// English corrections, one <c>heard =&gt; correct</c> per line, applied
+        /// to recognised text after whisper has produced it. Where the
+        /// vocabulary only biases the decoder, these are rules — the fix for a
+        /// word that comes back wrong the same way however it is prompted.
+        /// </summary>
+        public string Corrections { get; set; } = "";
+
+        /// <summary>The Korean corrections.</summary>
+        public string CorrectionsKo { get; set; } = "";
 
         /// <summary>
         /// "auto" (default), "fast" or "best". Decides the decoder's search:
