@@ -3,6 +3,25 @@
 VoxMark captures live meetings with precision speaker tagging, giving you
 audio and timestamps for your LLM.
 
+> **VoxMark** is an offline Windows meeting recorder. You tap a key when the
+> speaker changes. VoxMark records one MP3 and can transcribe the speech on
+> your own PC. Each line lands under the right speaker, in a Markdown file
+> ready to hand to an LLM for minutes and summaries.
+>
+> **VoxMark**은 오프라인 Windows 회의 녹음기입니다. 화자가 바뀔 때 키 하나를
+> 누르면 됩니다. 회의 전체가 MP3 한 파일로 녹음되고, 음성 인식도 내 PC에서
+> 바로 할 수 있습니다. 모든 문장이 해당 화자 아래로 정리된 Markdown이 나오며,
+> LLM에 넘기면 회의록과 요약이 바로 나옵니다.
+
+| | English | 한국어 |
+|---|---|---|
+| 🎙 | **One-key speaker marking** — number keys or tiles, global hotkeys, live repair and undo | **키 하나로 화자 마킹** — 숫자키·타일 클릭, 전역 단축키, 실시간 수정·되돌리기 |
+| 📝 | **On-device live transcript** — Whisper on NVIDIA CUDA, any Vulkan GPU (Intel Arc, AMD) or CPU | **PC 내 실시간 받아쓰기** — Whisper, NVIDIA CUDA·Vulkan GPU(Intel Arc, AMD)·CPU 지원 |
+| ✏️ | **Fix it as you go** — edit, strike out or join lines live, then review with find and replace all | **바로 고치는 자막** — 녹음 중 줄 수정·삭제·합치기, 끝나고 검색·일괄 치환 |
+| 📖 | **A dictionary that learns** — English and Korean lists with `heard => correct` rules, built from your own edits | **배우는 사전** — 영어·한국어 분리, `오인식 => 정답` 규칙, 내가 고친 단어로 자동 제안 |
+| 🤖 | **LLM-ready Markdown** — speaker segments, gaps, transcript and an agent brief for the report | **LLM용 Markdown** — 화자 구간·공백·자막·리포트 작성 지시문 포함 |
+| 🔒 | **Offline, one exe** — no install, no account, no network, and recording never stops | **오프라인 단일 exe** — 설치·계정·네트워크 불필요, 녹음은 절대 멈추지 않음 |
+
 One Windows PC sits in the meeting room, records the whole thing to a single
 MP3, and lets one operator mark who is speaking by clicking a tile or
 pressing a number key. On Stop it writes that MP3 plus a Markdown file of
