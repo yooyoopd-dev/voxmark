@@ -187,7 +187,7 @@ public sealed class RosterRow : Border
         {
             _keyCell.Content = new TextBlock
             {
-                Text = "Press 1–9, 0, ⇧1, ⇧2",
+                Text = "Press 1–9, 0, ⇧1–⇧6",
                 FontFamily = Ui.MonoFont,
                 FontSize = 11,
                 Foreground = Palette.AccentTextStrongBrush,

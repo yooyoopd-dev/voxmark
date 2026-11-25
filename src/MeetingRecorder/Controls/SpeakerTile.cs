@@ -20,7 +20,7 @@ public enum TileDensity
     /// <summary>7–9 · 3 cols · 96px · name 17px · role drops to a coloured dot.</summary>
     Tight,
 
-    /// <summary>10–12 · 4 cols · 76px · name 16px · name and time only.</summary>
+    /// <summary>10–16 · 4 cols (6 from 13) · 76px · name 16px · name and time only.</summary>
     Dense,
 }
 
@@ -395,12 +395,19 @@ public sealed class SpeakerTile : Border
         _ => TileDensity.Dense,
     };
 
-    /// <summary>Widening the window widens tiles; it never adds columns.</summary>
+    /// <summary>
+    /// Widening the window widens tiles; it never adds columns.
+    ///
+    /// 13–16 speakers go to six columns rather than a fourth row of four: a
+    /// fourth row does not fit the recording screen's height budget, and six
+    /// 160px-minimum tiles still fit the 1180px minimum window width.
+    /// </summary>
     public static int ColumnsFor(int count) => count switch
     {
         <= 4 => 2,
         <= 9 => 3,
-        _ => 4,
+        <= 12 => 4,
+        _ => 6,
     };
 
     /// <summary>

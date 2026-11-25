@@ -62,7 +62,10 @@ public sealed class ToastWindow : Window
         VerticalAlignment = VerticalAlignment.Center,
     };
 
-    private readonly StackPanel _keys = new() { Orientation = Orientation.Horizontal };
+    // Wraps, because a horizontal row of 30px chips stops fitting the 340px
+    // bar at nine speakers and the roster now reaches sixteen. The window
+    // sizes to its content's height, so a second row just makes it taller.
+    private readonly WrapPanel _keys = new() { Orientation = Orientation.Horizontal };
     private readonly Border _progress;
     private readonly Border _progressTrack;
     private readonly DispatcherTimer _dismiss = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -182,7 +185,7 @@ public sealed class ToastWindow : Window
                 Background = Palette.SurfaceBrush,
                 BorderBrush = Palette.HairlineBrush,
                 BorderThickness = new Thickness(1),
-                Margin = new Thickness(0, 0, 5, 0),
+                Margin = new Thickness(0, 0, 5, 5),
                 Tag = speaker.SlotIndex,
                 Child = new TextBlock
                 {

@@ -122,7 +122,7 @@ public sealed class SettingsWindow : ShellWindow
             if (value is string code) Speech(s => s.Language = code);
         };
         _language.Select(speech.Language);
-        _language.DisplayText = LanguageLabel(speech.Language);
+        _language.DisplayText = TranscriptionSettingsStore.LanguageName(speech.Language);
 
         _engine = new Dropdown("ChipButton") { MinHeight = 26, PopupMinWidth = 220 };
         _engine.SetItems(new (string, object)[]
@@ -661,25 +661,6 @@ public sealed class SettingsWindow : ShellWindow
         RefreshModel();
         Say("Back to " + WhisperRuntime.DefaultCudaFolder + ".", Palette.GoodBrush);
     }
-
-    /// <summary>
-    /// A code this list does not carry is shown as itself rather than as
-    /// "English": whisper accepts more languages than the eight offered here,
-    /// and a settings file naming one of them is right — mislabelling it would
-    /// be the only wrong thing in the exchange.
-    /// </summary>
-    private static string LanguageLabel(string code) => code switch
-    {
-        "auto" => "Auto-detect",
-        "en" => "English",
-        "ko" => "Korean",
-        "ja" => "Japanese",
-        "zh" => "Chinese",
-        "es" => "Spanish",
-        "fr" => "French",
-        "de" => "German",
-        _ => code,
-    };
 
     private static TextBox DictionaryBox() => new()
     {

@@ -10,8 +10,11 @@ namespace MeetingRecorder.Theme;
 public static class Palette
 {
     /// <summary>
-    /// Twelve fixed speaker slots, chosen to be told apart rather than to sit
-    /// evenly on a ring.
+    /// Sixteen fixed speaker slots, chosen to be told apart rather than to sit
+    /// evenly on a ring. The first twelve are the original set; 13–16 were
+    /// added when the roster grew to sixteen, each picked to sit at least as
+    /// far (CIELAB ΔE ≥ 25) from every other slot as the original twelve sit
+    /// from each other, within the same 5:1–9:1 contrast band.
     ///
     /// The previous set was one OKLCH ring at a single lightness, 30° apart.
     /// Even spacing reads well as a swatch strip and badly as twelve tiles in
@@ -44,6 +47,10 @@ public static class Palette
         Rgb(0x38C3E8), // 10 cyan
         Rgb(0xB58463), // 11 tan
         Rgb(0xA8A3B5), // 12 grey
+        Rgb(0xADC28E), // 13 sage
+        Rgb(0x32CC32), // 14 leaf
+        Rgb(0xCF81B7), // 15 mauve
+        Rgb(0x5393D4), // 16 steel
     };
 
     public static readonly Color Void = Rgb(0x0E1019);

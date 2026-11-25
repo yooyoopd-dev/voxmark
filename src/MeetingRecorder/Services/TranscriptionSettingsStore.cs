@@ -34,7 +34,12 @@ public static class TranscriptionSettingsStore
         /// </summary>
         public string CudaPath { get; set; } = "";
 
-        public string Language { get; set; } = "en";
+        /// <summary>
+        /// Whisper's language code. English unless the operator chose
+        /// otherwise in Settings — an empty or missing value reads as English
+        /// too (see <see cref="Load"/>), never as auto-detect.
+        /// </summary>
+        public string Language { get; set; } = DefaultLanguage;
 
         /// <summary>
         /// Names, products and jargon the recogniser should expect, one per
@@ -82,6 +87,28 @@ public static class TranscriptionSettingsStore
         public string Engine { get; set; } = "auto";
     }
 
+    /// <summary>The language every meeting starts in until Settings says otherwise.</summary>
+    public const string DefaultLanguage = "en";
+
+    /// <summary>
+    /// A language code as the operator reads it, for Setup, the recording
+    /// screen and Settings. A code this list does not carry is shown as
+    /// itself rather than as "English": whisper accepts more languages than
+    /// the eight Settings offers, and mislabelling one would be wrong.
+    /// </summary>
+    public static string LanguageName(string? code) => (code ?? "").Trim().ToLowerInvariant() switch
+    {
+        "" or "en" => "English",
+        "auto" => "Auto-detect",
+        "ko" => "Korean",
+        "ja" => "Japanese",
+        "zh" => "Chinese",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        var other => other,
+    };
+
     private static string Path => System.IO.Path.Combine(AppPaths.Root, "transcription.json");
 
     public static Settings Load()
@@ -90,7 +117,9 @@ public static class TranscriptionSettingsStore
         {
             if (File.Exists(Path))
             {
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(Path)) ?? new Settings();
+                var settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(Path)) ?? new Settings();
+                if (string.IsNullOrWhiteSpace(settings.Language)) settings.Language = DefaultLanguage;
+                return settings;
             }
         }
         catch (Exception)

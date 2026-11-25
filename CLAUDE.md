@@ -111,7 +111,7 @@ All five screens in the guide are built: **S1 Library → S2 Setup → S3 Record
 
 Implemented, with the guide section each answers to:
 
-- **02 tokens** — the colour ramp, the 12-slot speaker palette, monospaced
+- **02 tokens** — the colour ramp, the speaker palette (16 slots since the roster grew past the guide's 12), monospaced
   tabular timecodes, 4px spacing scale, 72×160 minimum tile. The speaker
   palette is **not** the guide's single-lightness OKLCH ring any more: even
   30° spacing gave three greens and two blues, because neighbours differed on
@@ -132,7 +132,12 @@ Implemented, with the guide section each answers to:
   named in its own label — a room mic sits far below full scale, and a
   linear trace uses a tenth of the lane however tall the lane is.
 - **05 grid** — column count and tile height derived from speaker count
-  alone (2→4 / 5–6 / 7–9 / 10–12), roster order fixed for the session. Tiles
+  alone (2→4 / 5–6 / 7–9 / 10–12 / 13–16), roster order fixed for the session.
+  **Up to 16 speakers**, at the user's request (`Speaker.MaxSpeakers`): slots
+  13–16 take keys ⇧3–⇧6 and four added palette colours, and 13–16 tiles go
+  to **six columns** rather than a fourth row, because a fourth row does not
+  fit the height budget below and six 160px tiles still fit the 1180px
+  minimum width — so the three-row worst case, and its arithmetic, still hold. Tiles
   are sized so the whole grid fits the default window height without a
   scrollbar — an operator hunting for a tile that scrolled out of sight is an
   operator not marking. Two things hold that:
@@ -183,9 +188,9 @@ Implemented, with the guide section each answers to:
   (1.2 s) had every handover arm the repair, so the next tap deleted the mark
   just made, swallowed the other speaker's turn and reopened the older one —
   the timeline appeared to jump backwards.
-- **09 keyboard** — 1–9/0 and Shift+1/2, Space, Ctrl+Z/Ctrl+Y (unlimited,
+- **09 keyboard** — 1–9/0 and Shift+1…6, Space, Ctrl+Z/Ctrl+Y (unlimited,
   snapshot-based), Ctrl+P, Ctrl+E, Ctrl+N, ↑↓/Enter/Tab/←→, Esc; plus
-  **Alt+1…0 / Alt+Shift+1,2 global hotkeys** with the 2-second, focus-free
+  **Alt+1…0 / Alt+Shift+1…6 global hotkeys** with the 2-second, focus-free
   mini-bar toast, and refused registrations named in the header.
 - **10 output contract** — unchanged in shape; see below.
 - **11 non-negotiables** — `marks.jsonl` fsync'd per operation, sleep and

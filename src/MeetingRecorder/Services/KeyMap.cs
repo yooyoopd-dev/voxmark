@@ -6,9 +6,9 @@ namespace MeetingRecorder.Services;
 /// <summary>
 /// The keyboard map from design guide section 09.
 ///
-/// <c>1 … 9, 0</c> toggle speakers 1–10. <c>Shift+1</c> and <c>Shift+2</c>
-/// are speakers 11 and 12 — and Shift is <i>only</i> a prefix for those two:
-/// Shift+3…0 are unbound, not aliases, so a stray Shift can never fire the
+/// <c>1 … 9, 0</c> toggle speakers 1–10. <c>Shift+1</c> … <c>Shift+6</c>
+/// are speakers 11–16 — and Shift is <i>only</i> a prefix for those six:
+/// Shift+7…0 are unbound, not aliases, so a stray Shift can never fire the
 /// wrong speaker.
 /// </summary>
 public static class KeyMap
@@ -20,7 +20,7 @@ public static class KeyMap
         if (digit is not int value) return null;
 
         if (!shift) return new MarkKey(value, false);
-        return value is 1 or 2 ? new MarkKey(value, true) : null;
+        return value is >= 1 and <= MarkKey.MaxShiftDigit ? new MarkKey(value, true) : null;
     }
 
     private static int? ToDigit(Key key) => key switch

@@ -137,7 +137,9 @@ one click.
 — the default on a GPU) and greedy decoding (the default on a CPU).
 
 **3. Turn it on.** Setup → Recording options → **Live transcription**. The
-line underneath tells you which model it found and whether it is running on
+line underneath tells you which model it found, which **language** whisper will
+listen for (English unless you change it in Settings; the recording screen
+shows it again beside the transcript), and whether it is running on
 `CUDA`, `Vulkan` or `CPU`. If something is missing it says what, and recording
 still goes ahead without a transcript — transcription can never stop a
 recording.
@@ -283,7 +285,7 @@ session inside the app only unlists it — VoxMark never deletes your audio.
    says plainly whether a quiet meter means silence or a device that is not
    sending anything), build the roster. Each speaker has a **Title** and a
    **Sub title** — a name and whatever else helps you pick them out mid-meeting
-   (role, team, seat) — and a marking key (1-9, 0, then Shift+1/Shift+2) you can
+   (role, team, seat) — and a marking key (1-9, 0, then Shift+1 … Shift+6, up to 16 speakers) you can
    reassign by clicking its key cell; absent people keep their slot and colour.
    Both lines show on the speaker's tile while recording. Save the roster as a
    preset to reuse it.
@@ -294,7 +296,7 @@ session inside the app only unlists it — VoxMark never deletes your audio.
    | | |
    |---|---|
    | `1`…`9`, `0` | mark speakers 1-10 |
-   | `Shift+1` / `Shift+2` | speakers 11-12 |
+   | `Shift+1` … `Shift+6` | speakers 11-16 |
    | `Alt+1`…`0` | the same, from any other app — a toast confirms |
    | `Space` | close the open mark without opening another |
    | `Ctrl+Z` / `Ctrl+Y` | undo / redo, unlimited |

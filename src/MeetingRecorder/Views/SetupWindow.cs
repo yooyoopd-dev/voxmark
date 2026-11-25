@@ -48,6 +48,7 @@ public sealed class SetupWindow : ShellWindow
 #if !VOXMARK_LITE
     private readonly CheckBox _transcribeToggle;
     private readonly TextBlock _modelName;
+    private readonly TextBlock _languageName;
     private readonly TextBlock _transcribeStatus;
 #endif
 
@@ -155,6 +156,7 @@ public sealed class SetupWindow : ShellWindow
 
         _modelName = Ui.Mono("—", 12.5, Palette.AccentTextBrush);
         _modelName.TextTrimming = TextTrimming.CharacterEllipsis;
+        _languageName = Ui.Mono("—", 12.5, Palette.AccentTextBrush);
         _transcribeStatus = Ui.Wrap("", 11.5, Palette.TextMutedBrush);
 
         _transcribeToggle = new CheckBox { VerticalAlignment = VerticalAlignment.Center };
@@ -451,6 +453,14 @@ public sealed class SetupWindow : ShellWindow
             Ui.Filler(),
             _modelName,
             SettingsLink()), 4));
+        // The language whisper will be told, echoed like the model: a meeting
+        // in Korean recognised as English comes back as gibberish, and this
+        // is the last place to catch it before the meeting starts.
+        optionRows.Add(Pad(Ui.Columns(1,
+            Ui.Text("Language", 12.5, Palette.TextDimBrush),
+            Ui.Filler(),
+            _languageName,
+            SettingsLink()), 4));
         optionRows.Add(Pad(_transcribeStatus, 4));
 #endif
 
@@ -565,7 +575,7 @@ public sealed class SetupWindow : ShellWindow
 
     private void AddSpeaker(string name = "", string role = "")
     {
-        if (_roster.Count >= 12) return;
+        if (_roster.Count >= Speaker.MaxSpeakers) return;
 
         var speaker = new Speaker
         {
@@ -587,7 +597,7 @@ public sealed class SetupWindow : ShellWindow
     /// <summary>A speaker added late takes the lowest free key, so marking continues without a dialog.</summary>
     private MarkKey LowestFreeKey()
     {
-        for (var slot = 0; slot < 12; slot++)
+        for (var slot = 0; slot < Speaker.MaxSpeakers; slot++)
         {
             var candidate = MarkKey.ForSlot(slot);
             if (_roster.All(s => s.Key != candidate)) return candidate;
@@ -995,7 +1005,7 @@ public sealed class SetupWindow : ShellWindow
     private void ApplyPreset(Preset preset)
     {
         _roster.Clear();
-        foreach (var speaker in preset.Speakers.Take(12))
+        foreach (var speaker in preset.Speakers.Take(Speaker.MaxSpeakers))
         {
             _roster.Add(speaker.Clone());
         }
@@ -1128,6 +1138,7 @@ public sealed class SetupWindow : ShellWindow
         _options.TranscriptionEnabled = _transcriptionPreferred && ready;
 
         _modelName.Text = model.Path.Length > 0 ? model.Name : "None found";
+        _languageName.Text = TranscriptionSettingsStore.LanguageName(_options.TranscriptionLanguage);
         _modelName.Foreground = ready ? Palette.AccentTextBrush : Palette.TextMutedBrush;
 
         _syncingTranscription = true;

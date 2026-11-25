@@ -204,7 +204,7 @@ public sealed class RecordingWindow : ShellWindow
         _minimap = new BlockLaneView { AllowTwoRows = session.Options.AllowOverlappingMarks, IsInteractive = false };
         _minimapClock = Ui.Mono("00:00:00 / whole session", 11, Palette.TextMutedBrush);
 
-        _speakersHeading = Ui.Section("Speakers · " + session.Speakers.Count + " of 12");
+        _speakersHeading = Ui.Section("Speakers · " + session.Speakers.Count + " of " + Speaker.MaxSpeakers);
         _rosterHint = Ui.Text(
             "Keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.",
             12, Palette.TextMutedBrush);
@@ -415,7 +415,13 @@ public sealed class RecordingWindow : ShellWindow
         hint.MaxWidth = 200;
         hint.Margin = new Thickness(0, 3, 0, 0);
 
-        var side = Ui.Vertical(0, _transcriptStatus!, hint);
+        // Which language whisper was told to hear — the first thing to check
+        // when the strip fills with nonsense.
+        var language = Ui.Text("Language: " + TranscriptionSettingsStore.LanguageName(_session.Options.TranscriptionLanguage),
+            11, Palette.AccentTextBrush);
+        language.Margin = new Thickness(0, 0, 0, 2);
+
+        var side = Ui.Vertical(0, language, _transcriptStatus!, hint);
         side.VerticalAlignment = VerticalAlignment.Top;
 
         var row = Ui.Columns(1,
@@ -546,9 +552,9 @@ public sealed class RecordingWindow : ShellWindow
         // scrolling. The header's "＋ Add speaker" and Ctrl+N are the same
         // action and cost no height at all.
 
-        _speakersHeading.Text = ("Speakers · " + count + " of 12").ToUpperInvariant();
-        _rosterHint.Text = count >= 12
-            ? "Roster is full — mark absent participants instead of adding a thirteenth"
+        _speakersHeading.Text = ("Speakers · " + count + " of " + Speaker.MaxSpeakers).ToUpperInvariant();
+        _rosterHint.Text = count >= Speaker.MaxSpeakers
+            ? "Roster is full — mark absent participants instead of adding another"
             : "Keyboard is the primary control; clicking a tile is the same action. Opening a new speaker closes the previous one.";
 
         _toast.SetRoster(_session.Speakers);
@@ -1317,9 +1323,9 @@ public sealed class RecordingWindow : ShellWindow
 
     private void ShowAddStrip()
     {
-        if (_session.Speakers.Count >= 12)
+        if (_session.Speakers.Count >= Speaker.MaxSpeakers)
         {
-            _dock.ShowNotice("Twelve slots are all taken — mark an absent participant instead", false);
+            _dock.ShowNotice("All " + Speaker.MaxSpeakers + " slots are taken — mark an absent participant instead", false);
             return;
         }
 
@@ -1351,7 +1357,7 @@ public sealed class RecordingWindow : ShellWindow
 
         var slot = _session.Speakers.Count;
         var key = MarkKey.ForSlot(slot);
-        for (var candidate = 0; candidate < 12; candidate++)
+        for (var candidate = 0; candidate < Speaker.MaxSpeakers; candidate++)
         {
             var option = MarkKey.ForSlot(candidate);
             if (_session.Speakers.All(s => s.Key != option))
