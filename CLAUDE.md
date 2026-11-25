@@ -358,7 +358,10 @@ they are properties of the machine and the company, not of a meeting:
   that comes back wrong the same way however it is prompted. Each rule's
   right-hand side also joins the prompt. Latin text matches on word
   boundaries; Hangul matches as a substring, because Korean attaches its
-  particles to the word. `TranscriptDictionary` names no Whisper.net type and
+  particles to the word. All rules apply in **one pass** over the line as
+  recognised, longest heard text first, and a match claims its stretch — so
+  no rule rewrites what another rule just wrote (applied in turn,
+  `John => Jon` undid `Jon => John`). `TranscriptDictionary` names no Whisper.net type and
   builds into both editions.
 - **Both lists are per language**, English and Korean
   (`Vocabulary`/`Corrections` and `VocabularyKo`/`CorrectionsKo` — the

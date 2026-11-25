@@ -217,25 +217,47 @@ public static class TranscriptDictionary
         applied = 0;
         if (rules is null || rules.Count == 0 || string.IsNullOrEmpty(text)) return text;
 
-        var count = 0;
+        // One pass over the line as recognised. Rules are tried in their
+        // compiled order (longest heard text first) and a match claims its
+        // stretch; a later rule may not match inside a claimed stretch or
+        // inside text an earlier rule wrote. Replacing rule by rule instead
+        // let "John => Jon" undo what "Jon => John" had just written.
+        var claimed = new List<(int Start, int End, string Replacement)>();
         foreach (var (pattern, replacement) in rules.Items)
         {
             try
             {
-                text = pattern.Replace(text, match =>
+                var found = new List<(int Start, int End, string Replacement)>();
+                for (var match = pattern.Match(text); match.Success; match = match.NextMatch())
                 {
-                    if (!string.Equals(match.Value, replacement, StringComparison.Ordinal)) count++;
-                    return replacement;
-                });
+                    int start = match.Index, end = match.Index + match.Length;
+                    if (match.Length > 0 && !claimed.Any(c => start < c.End && c.Start < end))
+                    {
+                        found.Add((start, end, replacement));
+                    }
+                }
+                claimed.AddRange(found);
             }
             catch (Exception)
             {
-                // Timed out or otherwise failed: leave the line as it was for this rule.
+                // Timed out or otherwise failed: this rule applies nowhere on the line.
             }
         }
+        if (claimed.Count == 0) return text;
+
+        var result = new System.Text.StringBuilder(text.Length);
+        var count = 0;
+        var at = 0;
+        foreach (var (start, end, replacement) in claimed.OrderBy(c => c.Start))
+        {
+            result.Append(text, at, start - at).Append(replacement);
+            if (!string.Equals(text[start..end], replacement, StringComparison.Ordinal)) count++;
+            at = end;
+        }
+        result.Append(text, at, text.Length - at);
 
         applied = count;
-        return text;
+        return result.ToString();
     }
 
     // ----------------------------------------------------- learning from edits
