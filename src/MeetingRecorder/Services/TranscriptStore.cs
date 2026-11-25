@@ -90,7 +90,77 @@ public sealed class TranscriptStore : IDisposable
         lock (_lock) _stream.Dispose();
     }
 
-    /// <summary>Read a transcript back. A half-written last line is what a crash leaves; it is skipped.</summary>
+    /// <summary>
+    /// Every line the operator corrected, as the recogniser produced it and
+    /// as they left it. This is what the append-only journal is for beyond
+    /// durability: the original stays on the record under its edits, so the
+    /// corrections can be read back afterwards and offered as dictionary
+    /// rules. Struck-out lines are left out — a line that was deleted says
+    /// nothing about how its words should have been spelled.
+    /// </summary>
+    public static List<(string Original, string Final)> ReadEdits(string path)
+    {
+        var edits = new List<(string Original, string Final)>();
+        if (!File.Exists(path)) return edits;
+
+        // Keyed by start time in milliseconds, which is how the file itself
+        // identifies a segment (three decimals, see Number).
+        var originals = new Dictionary<long, string>();
+        var finals = new Dictionary<long, string>();
+
+        try
+        {
+            foreach (var line in File.ReadLines(path))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    var key = (long)Math.Round(root.GetProperty("start").GetDouble() * 1000);
+                    var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+
+                    if (!root.TryGetProperty("op", out var op))
+                    {
+                        originals[key] = text;
+                        finals.Remove(key);
+                        continue;
+                    }
+
+                    switch (op.GetString())
+                    {
+                        case "edit":
+                            if (originals.ContainsKey(key)) finals[key] = text;
+                            break;
+                        case "delete":
+                            originals.Remove(key);
+                            finals.Remove(key);
+                            break;
+                    }
+                }
+                catch (Exception)
+                {
+                    // A torn line; everything else is still good.
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // An unreadable journal costs the suggestions, nothing else.
+        }
+
+        foreach (var (key, final) in finals.OrderBy(f => f.Key))
+        {
+            if (originals.TryGetValue(key, out var original) && !string.Equals(original, final, StringComparison.Ordinal))
+            {
+                edits.Add((original, final));
+            }
+        }
+
+        return edits;
+    }
+
+        /// <summary>Read a transcript back. A half-written last line is what a crash leaves; it is skipped.</summary>
     public static List<TranscriptSegment> Replay(string path)
     {
         var segments = new List<TranscriptSegment>();

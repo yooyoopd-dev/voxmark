@@ -6,7 +6,7 @@ using MeetingRecorder.Models;
 namespace MeetingRecorder.Services;
 
 /// <summary>
-/// Alt+1…0 and Alt+Shift+1/2 while any other app has focus — design guide
+/// Alt+1…0 and Alt+Shift+1…6 while any other app has focus — design guide
 /// section 09. Each press raises the mini-bar toast and nothing else; focus
 /// is never taken.
 ///

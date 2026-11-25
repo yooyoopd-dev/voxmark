@@ -96,6 +96,23 @@ public sealed class TranscriptionService : IDisposable
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
+    /// A line identical to the one before it, starting within this many
+    /// seconds of it, is whisper stuck in a loop rather than somebody
+    /// repeating themselves. The loop is a known failure of the decoder —
+    /// worse on the turbo models and on short chunks — and what it looks like
+    /// to the operator is one sentence stamped out again every second or two.
+    /// </summary>
+    private const double RepeatWindowSeconds = 8.0;
+
+    /// <summary>
+    /// Letters in a line (punctuation and case aside) from which an immediate
+    /// repeat is dropped outright. Below it the line is an interjection —
+    /// "Yeah.", "Okay." — which people really do say twice, so one repeat is
+    /// let through and only the third in a row is treated as a loop.
+    /// </summary>
+    private const int SubstantialRepeatLength = 12;
+
+    /// <summary>
     /// The shortest chunk a marked handover is allowed to produce. Below this
     /// the decode degrades enough to lose the words the cut was made to place
     /// correctly, so a handover this close to the last one is left to fall
@@ -149,6 +166,18 @@ public sealed class TranscriptionService : IDisposable
 
     /// <summary>Where the chunk being decoded starts, so the segment callback can offset into it.</summary>
     private double _chunkStartSeconds;
+
+    /// <summary>How much audio the chunk being decoded really holds; whisper pads the rest of its window.</summary>
+    private double _chunkDurationSeconds;
+
+    /// <summary>The last line let through, reduced to its letters, for the repeat guard. Worker thread only.</summary>
+    private string _lastLineKey = "";
+
+    private double _lastLineEndSeconds;
+    private int _repeatRun;
+
+    /// <summary>The operator's corrections for this meeting's language, compiled once in <see cref="Begin"/>.</summary>
+    private TranscriptDictionary.Rules? _corrections;
     private volatile bool _stopping;
     private volatile bool _faulted;
 
@@ -188,6 +217,12 @@ public sealed class TranscriptionService : IDisposable
 
     /// <summary>Recognised lines withheld as non-speech annotations or likely hallucinations.</summary>
     public int SuppressedSegments { get; private set; }
+
+    /// <summary>Recognised lines withheld because they repeated the line before them. See <see cref="RepeatWindowSeconds"/>.</summary>
+    public int RepeatedSegments { get; private set; }
+
+    /// <summary>Places a dictionary correction rewrote recognised text. Proof on the strip that the rules are firing.</summary>
+    public int DictionaryFixes { get; private set; }
 
     /// <summary>True once the worker is running and accepting audio.</summary>
     public bool IsRunning => _worker is not null && !_faulted;
@@ -293,6 +328,14 @@ public sealed class TranscriptionService : IDisposable
                 // has something to read. Cheap: a softmax the decoder has
                 // already computed.
                 .WithProbabilities()
+                // Each chunk is decoded on its own, without the text of the
+                // one before it as context. Carrying context is what lets a
+                // repeated or invented sentence feed itself into the next
+                // chunk and the one after; the vocabulary prompt below is
+                // still applied to every chunk, so what is given up is only
+                // the previous chunk's wording, which a chunk cut at a pause
+                // or a handover seldom needs.
+                .WithNoContext()
                 .WithSegmentEventHandler(OnSegment);
 
             builder = string.Equals(_options.TranscriptionLanguage, "auto", StringComparison.OrdinalIgnoreCase)
@@ -306,7 +349,17 @@ public sealed class TranscriptionService : IDisposable
             // chunk towards those spellings. It is the one lever that fixes a
             // name or an abbreviation the model keeps mangling without a
             // different model, and it costs nothing per chunk.
-            var prompt = BuildPrompt(tuning.Vocabulary);
+            //
+            // Which list depends on the meeting's language; and the right-hand
+            // side of every correction joins it, so a rule in Settings both
+            // nudges the decoder towards the right word and rewrites the
+            // wrong one if it comes out anyway.
+            var language = _options.TranscriptionLanguage;
+            var corrections = TranscriptDictionary.Parse(TranscriptDictionary.CorrectionsFor(tuning, language));
+            _corrections = TranscriptDictionary.Compile(corrections);
+
+            var prompt = BuildPrompt(TranscriptDictionary.VocabularyFor(tuning, language) + "\n" +
+                                     string.Join("\n", corrections.Select(c => c.Correct)));
             if (prompt.Length > 0) builder = builder.WithPrompt(prompt);
 
             // Beam search finds the better transcript — OpenAI's own default
@@ -331,7 +384,8 @@ public sealed class TranscriptionService : IDisposable
                           (_options.TranscriptionLanguage.Length > 0 ? _options.TranscriptionLanguage : "en") + " / " +
                           WhisperRuntime.LoadedRuntimeLabel +
                           (beam ? " / beam 5" : "") +
-                          (prompt.Length > 0 ? " / vocabulary" : "");
+                          (prompt.Length > 0 ? " / vocabulary" : "") +
+                          (_corrections.Count > 0 ? " / " + _corrections.Count + " corrections" : "");
 
             // The factory is built, so the loader has run and the answer is
             // real rather than predicted — the one moment this can be known
@@ -777,6 +831,7 @@ public sealed class TranscriptionService : IDisposable
         }
 
         _chunkStartSeconds = chunkStartSeconds;
+        _chunkDurationSeconds = chunk.Length / (double)_sourceSampleRate;
         try
         {
             _processor.Process(Resample(chunk));
@@ -867,12 +922,18 @@ public sealed class TranscriptionService : IDisposable
         var text = data.Text is { } raw ? raw.Trim() : "";
         if (text.Length == 0) return;
 
-        // Two kinds of line the recogniser produces that nobody said. The
+        var start = data.Start.TotalSeconds;
+        var end = data.End.TotalSeconds;
+
+        // Three kinds of line the recogniser produces that nobody said. The
         // annotation-only line is certain; the low-confidence line in a
         // window whisper itself rated as probably silent is the shape its
-        // hallucinations take. Neither is hidden: the count is on the strip
-        // and in the export, like dropped audio is.
+        // hallucinations take; and a line that starts after the chunk's audio
+        // has ended was decoded from the silence whisper pads its 30 s window
+        // with — there is no sound there for it to be a transcript of.
+        // None is hidden: the count is on the strip, like dropped audio is.
         if (NonSpeechOnly.IsMatch(text) ||
+            start >= _chunkDurationSeconds ||
             (data.NoSpeechProbability >= NoSpeechProbabilityFloor &&
              data.Probability < HallucinationProbabilityCeiling))
         {
@@ -880,13 +941,54 @@ public sealed class TranscriptionService : IDisposable
             return;
         }
 
+        end = Math.Min(end, _chunkDurationSeconds);
+
+        var startSeconds = _chunkStartSeconds + start;
+        var endSeconds = _chunkStartSeconds + end;
+
+        // The decoder's loop: the same sentence again, a second or two on.
+        var key = LineKey(text);
+        if (key.Length > 0 && key == _lastLineKey && startSeconds - _lastLineEndSeconds < RepeatWindowSeconds)
+        {
+            _repeatRun++;
+            _lastLineEndSeconds = Math.Max(_lastLineEndSeconds, endSeconds);
+            if (key.Length >= SubstantialRepeatLength || _repeatRun >= 2)
+            {
+                RepeatedSegments++;
+                return;
+            }
+        }
+        else
+        {
+            _lastLineKey = key;
+            _lastLineEndSeconds = endSeconds;
+            _repeatRun = 0;
+        }
+
+        // The operator's corrections, last: the rules are written against
+        // what whisper produces, and the journal and the strip should both
+        // show the corrected line.
+        text = TranscriptDictionary.Apply(text, _corrections, out var fixes);
+        DictionaryFixes += fixes;
+
         SegmentRecognised?.Invoke(new TranscriptSegment
         {
-            StartSeconds = _chunkStartSeconds + data.Start.TotalSeconds,
-            EndSeconds = _chunkStartSeconds + data.End.TotalSeconds,
+            StartSeconds = startSeconds,
+            EndSeconds = endSeconds,
             Text = text,
             Probability = data.Probability,
         });
+    }
+
+    /// <summary>A line reduced to lower-case letters and digits, so punctuation and capitals do not hide a repeat.</summary>
+    private static string LineKey(string text)
+    {
+        var key = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (char.IsLetterOrDigit(c)) key.Append(char.ToLowerInvariant(c));
+        }
+        return key.ToString();
     }
 
     /// <summary>

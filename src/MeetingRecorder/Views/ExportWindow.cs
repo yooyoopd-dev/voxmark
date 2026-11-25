@@ -29,6 +29,8 @@ public sealed class ExportWindow : ShellWindow
     private readonly List<AudioPart> _parts;
     private readonly StackPanel _files = new();
     private readonly StackPanel _summary = new();
+    private readonly StackPanel _corrections = new();
+    private Border? _correctionsCard;
     private readonly TextBlock _filesHeading;
     private readonly Button _copyButton;
 
@@ -47,6 +49,7 @@ public sealed class ExportWindow : ShellWindow
 
         SetBody(BuildBody());
         BuildSummary();
+        BuildCorrections();
         RefreshFiles(alreadyWritten ? "written" : "pending");
 
         Bar.CanMaximise = false;
@@ -84,6 +87,19 @@ public sealed class ExportWindow : ShellWindow
             new Thickness(15), Palette.HairlineSoftBrush, Palette.WellBrush);
         summaryCard.Margin = new Thickness(0, 12, 0, 0);
 
+        // The words the operator corrected by hand, offered as dictionary
+        // rules. Hidden until there is something to offer.
+        _correctionsCard = Ui.Card(Ui.Vertical(10,
+            Ui.Section("Corrections you made"),
+            Ui.Wrap("Words you changed in the transcript, most-repeated first. Add one to the dictionary and " +
+                    "from the next meeting the recogniser's version is rewritten to yours automatically, and " +
+                    "your spelling joins the vocabulary it is prompted with. Review and edit the rules in " +
+                    "Settings ▸ Speech recognition ▸ Dictionary.", 12, Palette.TextMutedBrush),
+            _corrections),
+            new Thickness(15));
+        _correctionsCard.Margin = new Thickness(0, 12, 0, 0);
+        _correctionsCard.Visibility = Visibility.Collapsed;
+
         var openFolder = Ui.MakeButton("Open folder", null, "GhostButton", (_, _) => OpenFolder());
         openFolder.MinHeight = 40;
 
@@ -104,6 +120,7 @@ public sealed class ExportWindow : ShellWindow
         content.Children.Add(blurb);
         content.Children.Add(filesCard);
         content.Children.Add(summaryCard);
+        content.Children.Add(_correctionsCard);
         content.Children.Add(actions);
 
         return new ScrollViewer
@@ -367,6 +384,7 @@ public sealed class ExportWindow : ShellWindow
 
             _session.Transcript = _session.Transcript.OrderBy(t => t.StartSeconds).ToList();
             BuildSummary();
+            BuildCorrections();
             RefreshFiles("pending");
             _copyButton.Content = "Copy Markdown";
             Dispatcher.InvokeAsync(WriteMarkdown, DispatcherPriority.Background);
@@ -375,6 +393,105 @@ public sealed class ExportWindow : ShellWindow
         {
             AppPaths.Note("The transcript review could not be opened: " + ex.Message);
         }
+    }
+
+    /// <summary>The most suggestions shown; past this the list is a chore, not an offer.</summary>
+    private const int MaxSuggestions = 30;
+
+    /// <summary>
+    /// List the word swaps the operator made by hand — on the live strip or
+    /// in the review window — read back from the transcript journal, each
+    /// with a button that turns it into a dictionary rule. One at a time on
+    /// purpose: a swap that was right for one sentence ("a" for "the") is not
+    /// automatically a rule, and only the operator can tell which is which.
+    /// </summary>
+    private void BuildCorrections()
+    {
+        if (_correctionsCard is null) return;
+        _corrections.Children.Clear();
+
+        List<TranscriptDictionary.Suggestion> suggestions;
+        TranscriptionSettingsStore.Settings settings;
+        try
+        {
+            suggestions = TranscriptDictionary.Suggest(TranscriptStore.ReadEdits(_session.TranscriptPath));
+            settings = TranscriptionSettingsStore.Load();
+        }
+        catch (Exception ex)
+        {
+            AppPaths.Note("The transcript corrections could not be read: " + ex.Message);
+            suggestions = new List<TranscriptDictionary.Suggestion>();
+            settings = new TranscriptionSettingsStore.Settings();
+        }
+
+        _correctionsCard.Visibility = suggestions.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        foreach (var suggestion in suggestions.Take(MaxSuggestions))
+        {
+            _corrections.Children.Add(CorrectionRow(suggestion, settings));
+        }
+
+        if (suggestions.Count > MaxSuggestions)
+        {
+            _corrections.Children.Add(Ui.Text(
+                "+ " + (suggestions.Count - MaxSuggestions) + " more, each made once", 12, Palette.TextMutedBrush));
+        }
+    }
+
+    private UIElement CorrectionRow(TranscriptDictionary.Suggestion suggestion, TranscriptionSettingsStore.Settings settings)
+    {
+        var rule = new TranscriptDictionary.Correction(suggestion.Heard, suggestion.Correct);
+        var list = TranscriptDictionary.ListForSuggestion(
+            _session.Options.TranscriptionLanguage, suggestion.Heard, suggestion.Correct);
+        var language = TranscriptDictionary.LanguageName(list);
+
+        var label = Ui.Mono(suggestion.Heard + "  →  " + suggestion.Correct, 13, Palette.TextBrush);
+        label.TextTrimming = TextTrimming.CharacterEllipsis;
+        label.VerticalAlignment = VerticalAlignment.Center;
+
+        var count = Ui.Mono(suggestion.Count > 1 ? "×" + suggestion.Count : "", 12, Palette.TextMutedBrush);
+        count.VerticalAlignment = VerticalAlignment.Center;
+        count.Margin = new Thickness(10, 0, 10, 0);
+
+        var add = Ui.MakeButton("Add to " + language + " dictionary", null, "ChipButton");
+        add.MinHeight = 26;
+
+        void MarkAdded()
+        {
+            add.Content = "✓ In the " + language + " dictionary";
+            add.IsEnabled = false;
+        }
+
+        if (TranscriptDictionary.Contains(TranscriptDictionary.CorrectionsFor(settings, list), rule))
+        {
+            MarkAdded();
+        }
+
+        add.Click += (_, _) =>
+        {
+            try
+            {
+                // Read-modify-write, like every other writer of this file.
+                var current = TranscriptionSettingsStore.Load();
+                var existing = TranscriptDictionary.CorrectionsFor(current, list);
+                if (!TranscriptDictionary.Contains(existing, rule))
+                {
+                    TranscriptDictionary.Set(current, list,
+                        TranscriptDictionary.VocabularyFor(current, list),
+                        TranscriptDictionary.Append(existing, rule));
+                    TranscriptionSettingsStore.Save(current);
+                }
+                MarkAdded();
+            }
+            catch (Exception ex)
+            {
+                AppPaths.Note("The correction could not be added to the dictionary: " + ex.Message);
+            }
+        };
+
+        var row = Ui.Columns(0, label, count, add);
+        row.Margin = new Thickness(0, 0, 0, 6);
+        return row;
     }
 
     private void OpenFolder()

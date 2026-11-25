@@ -13,6 +13,13 @@ namespace MeetingRecorder.Models;
 /// </summary>
 public sealed class Speaker
 {
+    /// <summary>
+    /// The most speakers a roster can hold: keys 1–9, 0 and ⇧1–⇧6, one
+    /// palette slot each. Raised from the design guide's twelve at the
+    /// user's request.
+    /// </summary>
+    public const int MaxSpeakers = 16;
+
     public int SlotIndex { get; set; }
     public string Name { get; set; } = "";
     public string Role { get; set; } = "";
