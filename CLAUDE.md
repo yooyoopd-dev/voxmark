@@ -223,7 +223,9 @@ Implemented, with the guide section each answers to:
   then lists **Corrections you made**: `TranscriptStore.ReadEdits` reads each
   edited line back beside its original — the journal keeps both, which is the
   other thing append-only buys — `TranscriptDictionary.Diff` reduces the pair
-  to the words that were swapped, and each swap gets an "Add to dictionary"
+  to the words that were swapped — less any Hangul both sides end with, so a
+  particle the operator left alone ("엔비디아가" → "NVIDIA가") does not end
+  up in the rule — and each swap gets an "Add to dictionary"
   button. One at a time, never "add all": a swap that was right for one
   sentence is not automatically a rule. The review window appends to the
   same `transcript.jsonl` through `TranscriptStore` and the export rewrites
@@ -356,7 +358,10 @@ they are properties of the machine and the company, not of a meeting:
   that comes back wrong the same way however it is prompted. Each rule's
   right-hand side also joins the prompt. Latin text matches on word
   boundaries; Hangul matches as a substring, because Korean attaches its
-  particles to the word. `TranscriptDictionary` names no Whisper.net type and
+  particles to the word. All rules apply in **one pass** over the line as
+  recognised, longest heard text first, and a match claims its stretch — so
+  no rule rewrites what another rule just wrote (applied in turn,
+  `John => Jon` undid `Jon => John`). `TranscriptDictionary` names no Whisper.net type and
   builds into both editions.
 - **Both lists are per language**, English and Korean
   (`Vocabulary`/`Corrections` and `VocabularyKo`/`CorrectionsKo` — the

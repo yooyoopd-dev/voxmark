@@ -217,25 +217,47 @@ public static class TranscriptDictionary
         applied = 0;
         if (rules is null || rules.Count == 0 || string.IsNullOrEmpty(text)) return text;
 
-        var count = 0;
+        // One pass over the line as recognised. Rules are tried in their
+        // compiled order (longest heard text first) and a match claims its
+        // stretch; a later rule may not match inside a claimed stretch or
+        // inside text an earlier rule wrote. Replacing rule by rule instead
+        // let "John => Jon" undo what "Jon => John" had just written.
+        var claimed = new List<(int Start, int End, string Replacement)>();
         foreach (var (pattern, replacement) in rules.Items)
         {
             try
             {
-                text = pattern.Replace(text, match =>
+                var found = new List<(int Start, int End, string Replacement)>();
+                for (var match = pattern.Match(text); match.Success; match = match.NextMatch())
                 {
-                    if (!string.Equals(match.Value, replacement, StringComparison.Ordinal)) count++;
-                    return replacement;
-                });
+                    int start = match.Index, end = match.Index + match.Length;
+                    if (match.Length > 0 && !claimed.Any(c => start < c.End && c.Start < end))
+                    {
+                        found.Add((start, end, replacement));
+                    }
+                }
+                claimed.AddRange(found);
             }
             catch (Exception)
             {
-                // Timed out or otherwise failed: leave the line as it was for this rule.
+                // Timed out or otherwise failed: this rule applies nowhere on the line.
             }
         }
+        if (claimed.Count == 0) return text;
+
+        var result = new System.Text.StringBuilder(text.Length);
+        var count = 0;
+        var at = 0;
+        foreach (var (start, end, replacement) in claimed.OrderBy(c => c.Start))
+        {
+            result.Append(text, at, start - at).Append(replacement);
+            if (!string.Equals(text[start..end], replacement, StringComparison.Ordinal)) count++;
+            at = end;
+        }
+        result.Append(text, at, text.Length - at);
 
         applied = count;
-        return text;
+        return result.ToString();
     }
 
     // ----------------------------------------------------- learning from edits
@@ -273,8 +295,7 @@ public static class TranscriptDictionary
         {
             if (removed.Count is > 0 and <= MaxSuggestionWords && added.Count is > 0 and <= MaxSuggestionWords)
             {
-                var heard = string.Join(" ", removed);
-                var correct = string.Join(" ", added);
+                var (heard, correct) = TrimSharedHangulTail(string.Join(" ", removed), string.Join(" ", added));
                 if (heard.Length >= 2 && !string.Equals(heard, correct, StringComparison.Ordinal))
                 {
                     result.Add(new Correction(heard, correct));
@@ -305,6 +326,33 @@ public static class TranscriptDictionary
         Flush();
 
         return result;
+    }
+
+    /// <summary>
+    /// Drop the Hangul both sides end with. Korean attaches its particles to
+    /// the word, so "엔비디아가" corrected to "NVIDIA가" is the term
+    /// "엔비디아" plus a "가" the operator left alone. Kept, the particle makes
+    /// a rule that fires before "가" only, and splits one repeated correction
+    /// into a suggestion per particle. Hangul only, since a rule matches inside
+    /// Hangul but needs a word boundary after a Latin letter, and never down to
+    /// a heard side under two characters.
+    /// </summary>
+    private static (string Heard, string Correct) TrimSharedHangulTail(string heard, string correct)
+    {
+        var shared = 0;
+        while (shared < heard.Length && shared < correct.Length &&
+               heard[^(shared + 1)] == correct[^(shared + 1)] &&
+               heard[^(shared + 1)] is >= '가' and <= '힣')
+        {
+            shared++;
+        }
+        if (shared == 0) return (heard, correct);
+
+        var trimmedHeard = heard[..^shared].TrimEnd();
+        var trimmedCorrect = correct[..^shared].TrimEnd();
+        return trimmedHeard.Length >= 2 && trimmedCorrect.Length > 0
+            ? (trimmedHeard, trimmedCorrect)
+            : (heard, correct);
     }
 
     /// <summary>A line as words, each stripped of the punctuation around it.</summary>
