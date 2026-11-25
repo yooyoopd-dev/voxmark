@@ -273,8 +273,7 @@ public static class TranscriptDictionary
         {
             if (removed.Count is > 0 and <= MaxSuggestionWords && added.Count is > 0 and <= MaxSuggestionWords)
             {
-                var heard = string.Join(" ", removed);
-                var correct = string.Join(" ", added);
+                var (heard, correct) = TrimSharedHangulTail(string.Join(" ", removed), string.Join(" ", added));
                 if (heard.Length >= 2 && !string.Equals(heard, correct, StringComparison.Ordinal))
                 {
                     result.Add(new Correction(heard, correct));
@@ -305,6 +304,33 @@ public static class TranscriptDictionary
         Flush();
 
         return result;
+    }
+
+    /// <summary>
+    /// Drop the Hangul both sides end with. Korean attaches its particles to
+    /// the word, so "엔비디아가" corrected to "NVIDIA가" is the term
+    /// "엔비디아" plus a "가" the operator left alone. Kept, the particle makes
+    /// a rule that fires before "가" only, and splits one repeated correction
+    /// into a suggestion per particle. Hangul only, since a rule matches inside
+    /// Hangul but needs a word boundary after a Latin letter, and never down to
+    /// a heard side under two characters.
+    /// </summary>
+    private static (string Heard, string Correct) TrimSharedHangulTail(string heard, string correct)
+    {
+        var shared = 0;
+        while (shared < heard.Length && shared < correct.Length &&
+               heard[^(shared + 1)] == correct[^(shared + 1)] &&
+               heard[^(shared + 1)] is >= '가' and <= '힣')
+        {
+            shared++;
+        }
+        if (shared == 0) return (heard, correct);
+
+        var trimmedHeard = heard[..^shared].TrimEnd();
+        var trimmedCorrect = correct[..^shared].TrimEnd();
+        return trimmedHeard.Length >= 2 && trimmedCorrect.Length > 0
+            ? (trimmedHeard, trimmedCorrect)
+            : (heard, correct);
     }
 
     /// <summary>A line as words, each stripped of the punctuation around it.</summary>

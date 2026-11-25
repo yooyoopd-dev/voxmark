@@ -223,7 +223,9 @@ Implemented, with the guide section each answers to:
   then lists **Corrections you made**: `TranscriptStore.ReadEdits` reads each
   edited line back beside its original — the journal keeps both, which is the
   other thing append-only buys — `TranscriptDictionary.Diff` reduces the pair
-  to the words that were swapped, and each swap gets an "Add to dictionary"
+  to the words that were swapped — less any Hangul both sides end with, so a
+  particle the operator left alone ("엔비디아가" → "NVIDIA가") does not end
+  up in the rule — and each swap gets an "Add to dictionary"
   button. One at a time, never "add all": a swap that was right for one
   sentence is not automatically a rule. The review window appends to the
   same `transcript.jsonl` through `TranscriptStore` and the export rewrites
